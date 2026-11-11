@@ -527,7 +527,14 @@ function parseOcr(res, ctx){
   let m=full.match(/(?:LVL|LEVEL|N[IÍ]VEL)\s*:?\s*(\d{1,3})/i); if(m) o.nivel=parseInt(m[1]);
   // espécie: "(PYROMANE)" no título, ou uma linha que seja exatamente o nome de uma espécie
   const spByNorm={}; SPECIES.forEach(s=>{ const k=norm(s.n).replace(/[^a-z0-9]/g,""); if(!spByNorm[k] || !s.v.length) spByNorm[k]=s; });
-  const tryName=t=>{ const k=norm(t).replace(/[^a-z0-9]/g,""); return k.length>=3 && spByNorm[k] ? spByNorm[k].n : null; };
+  const fix=t=>norm(t).replace(/0/g,"o").replace(/[1|]/g,"l").replace(/5/g,"s").replace(/[^a-z]/g,"");
+  const spFix={}; SPECIES.forEach(s=>{ const k=fix(s.n); if(!spFix[k] || !s.v.length) spFix[k]=s; });
+  const keys=Object.keys(spFix);
+  const lev=(a,b)=>{ if(Math.abs(a.length-b.length)>2) return 9; const d=[...Array(b.length+1).keys()]; for(let i=1;i<=a.length;i++){ let prev=d[0]; d[0]=i; for(let j=1;j<=b.length;j++){ const tmp=d[j]; d[j]=Math.min(d[j]+1,d[j-1]+1,prev+(a[i-1]===b[j-1]?0:1)); prev=tmp; } } return d[b.length]; };
+  const tryName=t=>{ const k=norm(t).replace(/[^a-z0-9]/g,""); if(k.length>=3 && spByNorm[k]) return spByNorm[k].n;
+    const f=fix(t).replace(/i/g,"l"); if(f.length<5) return null;
+    let best=null, bd=9; for(const key of keys){ const kk=key.replace(/i/g,"l"); const dd=lev(f,kk); if(dd<bd){bd=dd; best=key;} }
+    return bd<=Math.min(2,Math.floor(f.length/5)) ? spFix[best].n : null; };
   m=full.match(/\(([^()\n]{3,40})\)?/); if(m && tryName(m[1])) o.especie=tryName(m[1]);
   if(!o.especie) for(const l of L){ const n=tryName(l.t); if(n){ o.especie=n; break; } }
   // nome: texto antes de " - LVL"
@@ -1072,9 +1079,16 @@ async function setupPhoto(){
   const handlePhoto=async f=>{
     if(!f) return;
     if(IS_APK){
-      const ov=sheet('<div class="row"><div class="spin"></div><div>Lendo a foto no celular…</div></div>',{center:true});
+      const ov=sheet('<div class="row"><div class="spin"></div><div id="ocrStep">Preparando a imagem…</div></div>',{center:true});
+      const step=t=>{ const el=document.getElementById("ocrStep"); if(el) el.textContent=t; };
+      let etapa="preparar a imagem";
       try{
-        const res=await readPhotoOnDevice(f); state.lastOcr=res;
+        const fn=ocrNative(); if(!fn) throw {code:"sem_ocr", message:"o leitor de texto do APK não foi encontrado (Capacitor: "+Object.keys(window.Capacitor||{}).join(",")+")"};
+        const blob=await shrink(f); etapa="converter a imagem";
+        const b64=await blobToBase64(blob);
+        etapa="ler o texto (ML Kit)"; step("Lendo o texto da imagem…");
+        const res=await fn({base64:b64}); state.lastOcr=res;
+        etapa="interpretar o texto";
         const o=parseOcr(res);
         const c=state.editing;
         let s=byBp[c.sp];
@@ -1083,13 +1097,28 @@ async function setupPhoto(){
           const origem=((o.mutM||0)+(o.mutP||0))>0 ? "criado" : (c.origem||"domesticado");
           assignCryopod(o, s, origem, o.impressao!=null?o.impressao:c.ib);
         }
-        delete o._nums; delete o._ordem;
+        const nums=o._nums||[]; delete o._nums; delete o._ordem;
         ov.remove();
-        if(!Object.keys(o.valores).length && !o.especie && !o.nivel){ toast("Não encontrei números na foto. Tente uma foto mais reta e nítida."); showOcrLink(); return; }
-        c.modo="valores";
-        applyPhoto(o);
+        const nLin=(res&&res.lines||[]).length, nVal=Object.keys(o.valores).length;
+        if(nVal||o.especie||o.nivel){ c.modo="valores"; applyPhoto(o); }
+        // janela de resultado (não some sozinha)
+        const lin=[];
+        lin.push("<b>Linhas de texto lidas:</b> "+nLin);
+        lin.push("<b>Tipo de tela:</b> "+(o._modo==="inventario"?"inventário (com nomes)":o._modo==="cryopod"?"card do cryopod (ícones)":"não identificado"));
+        lin.push("<b>Espécie:</b> "+(o.especie?esc(o.especie):(byBp[c.sp]?esc(spLabel(byBp[c.sp]))+" (já escolhida)":'<span style="color:var(--red)">não reconhecida — escolha no campo Espécie</span>')));
+        lin.push("<b>Nível:</b> "+(o.nivel||"—")+(o.impressao!=null?" · <b>Impressão:</b> "+o.impressao+"%":"")+((o.mutM||o.mutP)?" · <b>Mutações:</b> "+(o.mutM||0)+"/"+(o.mutP||0):""));
+        const vk=Object.entries(o.valores).map(([k,v])=>k+" "+esc(v));
+        lin.push("<b>Valores ("+nVal+"):</b> "+(vk.length?vk.join(" · "):'<span style="color:var(--red)">nenhum</span>'));
+        if(o._modo==="cryopod" && !s && nums.length) lin.push('<span style="color:var(--amber)">Achei '+nums.length+' números, mas sem a espécie não sei a qual status cada um pertence. Escolha a espécie e leia a foto de novo.</span>');
+        if(!nLin) lin.push('<span style="color:var(--red)">O leitor não encontrou texto. Tente um print, ou uma foto mais reta, nítida e sem reflexo.</span>');
+        const rs=sheet('<h3 style="margin:0 0 8px">Resultado da leitura</h3><div style="font-size:14px;line-height:1.6">'+lin.join("<br>")+'</div><div class="row" style="margin-top:12px"><button class="btn grow" data-t>Ver texto lido</button><button class="btn pri grow" data-x>Ok</button></div>',{center:true});
+        rs.querySelector("[data-x]").onclick=()=>rs.remove();
+        rs.querySelector("[data-t]").onclick=()=>{ rs.remove(); openOcrText(); };
         showOcrLink();
-      }catch(err){ ov.remove(); explica("falha", (err&&err.code||"erro")+" · "+(err&&err.message||String(err))); }
+      }catch(err){
+        ov.remove();
+        explica("falha", "etapa: "+etapa+" · "+(err&&err.code||"erro")+" · "+(err&&err.message||(typeof err==="string"?err:JSON.stringify(err))));
+      }
       return;
     }
     if(!sample){ explica(motivo||"sem_capacidade"); return; }
@@ -1153,15 +1182,17 @@ async function setupPhoto(){
     pb.addEventListener("input",()=>setTimeout(resetTxt,10));
   }
 }
+function openOcrText(){
+  if(!state.lastOcr) return;
+  const txt=(state.lastOcr.lines||[]).map(l=>l.t+"  @"+l.x+","+l.y).join("\n")||"(nenhum texto)";
+  const ov=sheet('<h3 style="margin:0 0 8px">Texto que o celular leu</h3><p class="note" style="margin-top:0">Se a leitura errou, copie e mande para o Claude no chat.</p><textarea rows="12" readonly style="font-family:monospace;font-size:12px">'+esc(txt)+'</textarea><div class="row" style="margin-top:8px"><button class="btn grow" data-c>Copiar</button><button class="btn pri grow" data-x>Fechar</button></div>');
+  ov.querySelector("[data-x]").onclick=()=>ov.remove();
+  ov.querySelector("[data-c]").onclick=async()=>{ try{ await navigator.clipboard.writeText(txt); toast("Copiado!"); }catch(e){ const ta=ov.querySelector("textarea"); ta.removeAttribute("readonly"); ta.focus(); ta.select(); try{ document.execCommand("copy"); toast("Copiado!"); }catch(e2){ toast("Selecione e copie o texto."); } } };
+}
 function showOcrLink(){
   const box=document.getElementById("photoWrap"); if(!box || !state.lastOcr || document.getElementById("ocrLink")) return;
   const b=document.createElement("button"); b.id="ocrLink"; b.className="btn ghost"; b.style.cssText="width:100%;margin-top:6px;font-size:13px";
-  b.textContent="Ver texto lido da última foto"; box.appendChild(b);
-  b.onclick=()=>{ const txt=(state.lastOcr.lines||[]).map(l=>l.t+"  @"+l.x+","+l.y).join("\n");
-    const ov=sheet('<h3 style="margin:0 0 8px">Texto que o celular leu</h3><p class="note" style="margin-top:0">Se a leitura errou, copie e mande para o Claude no chat.</p><textarea rows="12" readonly style="font-family:monospace;font-size:12px">'+esc(txt)+'</textarea><div class="row" style="margin-top:8px"><button class="btn grow" data-c>Copiar</button><button class="btn pri grow" data-x>Fechar</button></div>');
-    ov.querySelector("[data-x]").onclick=()=>ov.remove();
-    ov.querySelector("[data-c]").onclick=async()=>{ try{ await navigator.clipboard.writeText(txt); toast("Copiado!"); }catch(e){ ov.querySelector("textarea").select(); toast("Selecione e copie o texto."); } };
-  };
+  b.textContent="Ver texto lido da última foto"; box.appendChild(b); b.onclick=openOcrText;
 }
 function shrink(file){
   return new Promise((res,rej)=>{
