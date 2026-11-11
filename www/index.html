@@ -845,7 +845,7 @@ function viewAdd(){
   const isEdit=state.creatures.has(c.id);
   let h='<h2 style="margin:6px 2px 4px">'+(isEdit?"Editar criatura":"Nova criatura")+'</h2>';
   // foto
-  h+='<div id="photoWrap"><div class="photo" id="photoBox" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><div class="grow"><b>Ler da foto da tela</b><div class="note" style="margin:2px 0 0">Tire uma foto da TV ou um print do painel de status (inventário ou card do cryopod). Os campos são preenchidos para você revisar.</div></div><span class="btn filebtn pri" style="flex:none">Foto<input id="photoIn" type="file" accept="image/*"></span></div><div class="paste" id="pasteBox" contenteditable="true" inputmode="none">ou toque aqui, segure e escolha <b>Colar</b> para usar uma imagem copiada</div></div>';
+  h+='<div id="photoWrap"><div class="photo" id="photoBox" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><div class="grow"><b>Ler da tela do jogo</b><div class="note" style="margin:2px 0 0"><b>Câmera</b>: fotografe a TV com o painel de status aberto (de frente, sem reflexo, a tela ocupando a foto). <b>Galeria</b>: um print ou foto já tirada. Funciona com o inventário e com o card do cryopod.</div></div><div style="display:flex;flex-direction:column;gap:6px;flex:none"><span class="btn filebtn pri" style="padding:9px 14px">Câmera<input id="photoCam" type="file" accept="image/*" capture="environment"></span><span class="btn filebtn" style="padding:9px 14px">Galeria<input id="photoIn" type="file" accept="image/*"></span></div></div></div>';
   // espécie
   h+='<label class="f">Espécie</label><div id="spBox"></div>';
   if(s){
@@ -1167,8 +1167,7 @@ async function setupPhoto(){
       else explica("falha", code+" · "+msg);
     }
   };
-  const inp=document.getElementById("photoIn");
-  inp.onchange=e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; handlePhoto(f); };
+  ["photoIn","photoCam"].forEach(id=>{ const inp=document.getElementById(id); if(inp) inp.onchange=e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; handlePhoto(f); }; });
   const pb=document.getElementById("pasteBox");
   if(pb){
     const resetTxt=()=>{ pb.innerHTML='ou toque aqui, segure e escolha <b>Colar</b> para usar uma imagem copiada'; };

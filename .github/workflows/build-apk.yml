@@ -35,6 +35,9 @@ jobs:
         run: |
           cp native/OcrPlugin.java native/MainActivity.java android/app/src/main/java/com/chicosl/arkbreeding/
           printf "\ndependencies {\n    implementation 'com.google.mlkit:text-recognition:16.0.1'\n}\n" >> android/app/build.gradle
+          # Android 11+: permite enxergar o app de câmera (botão "Câmera" abre a câmera direto)
+          sed -i 's#<application#<queries>\n        <intent>\n            <action android:name="android.media.action.IMAGE_CAPTURE" />\n        </intent>\n    </queries>\n\n    <application#' android/app/src/main/AndroidManifest.xml
+          grep -n "IMAGE_CAPTURE" android/app/src/main/AndroidManifest.xml
 
       - name: Compilar APK (debug)
         working-directory: android
