@@ -479,6 +479,162 @@ function _quick(s,i,origem,P,te,ib,raw,noTm){
   return best ? {w:best.w, exact:false} : null;
 }
 
+/* ===================== LEITURA NO APARELHO (APK, Google ML Kit) =====================
+ O plugin nativo devolve linhas de texto com posição (x, y, w, h).
+ Este intérprete transforma isso no mesmo objeto que a leitura pelo Claude devolve
+ ({especie, nome, nivel, valores:{...}, cores, mutM, mutP, impressao}), para reaproveitar applyPhoto().
+
+ Telas tratadas:
+  - Inventário (aba Eles/Them): cada status tem o NOME escrito -> casa nome com o número da mesma linha.
+  - Card do cryopod: só ÍCONES -> pega os números "atual / máximo" e testa qual distribuição
+    entre os status encaixa nos pontos da espécie (a que fecha exata vence; empate = ordem do card). */
+
+function ocrNative(){
+  const cap=window.Capacitor; if(!cap) return null;
+  if(cap.Plugins && cap.Plugins.Ocr && cap.Plugins.Ocr.read) return o=>cap.Plugins.Ocr.read(o);
+  if(typeof cap.registerPlugin==="function"){ try{ const p=cap.registerPlugin("Ocr"); if(p&&p.read) return o=>p.read(o); }catch(e){} }
+  if(typeof cap.nativePromise==="function") return o=>cap.nativePromise("Ocr","read",o);
+  return null;
+}
+function blobToBase64(blob){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(",")[1]); r.onerror=rej; r.readAsDataURL(blob); }); }
+
+/* número no formato do jogo: "3888.1", "3.888,1", "13596.5" */
+function ocrNum(s){
+  if(s==null) return null; let t=String(s).replace(/[Oo]/g,"0").replace(/[lI|]/g,"1").replace(/\s/g,"");
+  const p=parseVal(t,false); return p?t:null;
+}
+const OCR_LABELS=[
+  [0,/\b(SA[UÚ]DE|HEALTH|VIDA)\b/i],[1,/\b(ESTAMINA|STAMINA|ENERGIA)\b/i],[3,/\b(OXIG[EÊ]NIO|OXYGEN)\b/i],
+  [4,/\b(COMIDA|FOOD)\b/i],[7,/\b(PESO|WEIGHT|CARGA)\b/i],[8,/\b(DANO|MELEE|COMBATE)\b/i],
+  [9,/\b(VELOCIDADE|SPEED|MOVEMENT)\b/i],[2,/\b(TORPOR|TORPIDITY|TORPIDEZ)\b/i],[11,/\b(CRAFT|CRIA[CÇ][AÃ]O)\b/i]
+];
+// "a / b" -> b ; "318.7 %" -> 318.7
+const RE_PAIR=/(\d[\d.,]*\d|\d)\s*[\/|]\s*(\d[\d.,]*\d|\d)/g;
+const RE_PCT=/(\d[\d.,]*\d|\d)\s*%/g;
+
+function ocrLines(res){
+  const L=(res&&res.lines||[]).map(l=>({t:String(l.t||""), x:l.x||0, y:l.y||0, w:l.w||0, h:l.h||10, e:l.e||[]}));
+  L.forEach(l=>{ l.cy=l.y+l.h/2; l.cx=l.x+l.w/2; });
+  return L;
+}
+function pairsIn(text){ const out=[]; let m; RE_PAIR.lastIndex=0; while((m=RE_PAIR.exec(text))){ const v=ocrNum(m[2]); if(v) out.push(v); } return out; }
+function pctsIn(text){ const out=[]; let m; RE_PCT.lastIndex=0; while((m=RE_PCT.exec(text))){ const v=ocrNum(m[1]); if(v) out.push(v); } return out; }
+
+function parseOcr(res, ctx){
+  const L=ocrLines(res); const full=L.map(l=>l.t).join("\n");
+  const o={valores:{}, _modo:null};
+  // nível
+  let m=full.match(/(?:LVL|LEVEL|N[IÍ]VEL)\s*:?\s*(\d{1,3})/i); if(m) o.nivel=parseInt(m[1]);
+  // espécie: "(PYROMANE)" no título, ou uma linha que seja exatamente o nome de uma espécie
+  const spByNorm={}; SPECIES.forEach(s=>{ const k=norm(s.n).replace(/[^a-z0-9]/g,""); if(!spByNorm[k] || !s.v.length) spByNorm[k]=s; });
+  const tryName=t=>{ const k=norm(t).replace(/[^a-z0-9]/g,""); return k.length>=3 && spByNorm[k] ? spByNorm[k].n : null; };
+  m=full.match(/\(([^()\n]{3,40})\)?/); if(m && tryName(m[1])) o.especie=tryName(m[1]);
+  if(!o.especie) for(const l of L){ const n=tryName(l.t); if(n){ o.especie=n; break; } }
+  // nome: texto antes de " - LVL"
+  m=full.match(/^(.{2,40}?)\s*[-–]\s*(?:LVL|LEVEL)/im); if(m) o.nome=m[1].trim();
+  // mutações: "256 Mutations" (o da esquerda = materno)
+  const mutL=[]; L.filter(l=>/muta/i.test(l.t)).forEach(l=>{ const re=/(\d+)\s*muta/ig; let mm, k=0; while((mm=re.exec(l.t))){ mutL.push({x:l.x+(k++)*1000, n:parseInt(mm[1])}); } });
+  mutL.sort((a,b)=>a.x-b.x);
+  if(mutL.length){ o.mutM=mutL[0].n; if(mutL[1]) o.mutP=mutL[1].n; }
+  // impressão
+  for(const l of L){ if(/imprint|impress/i.test(l.t)||/%\s*[-–]\s*\S/.test(l.t)){ const p=pctsIn(l.t)[0] || (L.find(z=>z!==l && Math.abs(z.cy-l.cy)<l.h && z.x>l.x && pctsIn(z.t).length)||{t:""}).t.match(/(\d[\d.,]*)\s*%/)?.[1]; if(p){ o.impressao=parseFloat(String(p).replace(",",".")); break; } } }
+  // cores: uma fileira com 6 números inteiros 0–255
+  o.cores=ocrColors(L);
+
+  // ---------- inventário: rótulos escritos ----------
+  const found={};
+  for(const l of L){
+    for(const [i,re] of OCR_LABELS){ if(found[i]!=null || !re.test(l.t)) continue;
+      // valor na própria linha ou na linha à direita na mesma altura
+      let txt=l.t;
+      const right=L.filter(z=>z!==l && z.x>l.x+l.w*0.5 && Math.abs(z.cy-l.cy)<Math.max(l.h,z.h)*0.7).sort((a,b)=>a.x-b.x);
+      if(!pairsIn(txt).length && !pctsIn(txt).length && right.length) txt+=" "+right.map(z=>z.t).join(" ");
+      const pr=pairsIn(txt), pc=pctsIn(txt);
+      const v = PERCENT.has(i) ? (pc[0]||null) : (pr[0]||null);
+      if(v){ found[i]=v; }
+    }
+  }
+  if(Object.keys(found).length>=3){
+    o._modo="inventario";
+    for(const [i,v] of Object.entries(found)) o.valores[ocrKey(+i)]=v;
+    return o;
+  }
+
+  // ---------- card do cryopod: só ícones ----------
+  o._modo="cryopod";
+  const items=[];
+  for(const l of L){
+    if(/cryopod|charge|throw|weight:|recharge|mutation/i.test(l.t)) continue;
+    for(const v of pairsIn(l.t)) items.push({v, x:l.x, y:l.y, cx:l.cx, cy:l.cy, pct:false});
+    if(/%\s*[-–]/.test(l.t)) continue; // linha da impressão
+    for(const v of pctsIn(l.t)) items.push({v, x:l.x, y:l.y, cx:l.cx, cy:l.cy, pct:true});
+  }
+  if(!items.length) return o;
+  // colunas: divide pelo maior intervalo em x
+  const xs=items.map(z=>z.cx).sort((a,b)=>a-b); let cut=null, gap=0;
+  for(let k=1;k<xs.length;k++){ const g=xs[k]-xs[k-1]; if(g>gap){gap=g; cut=(xs[k]+xs[k-1])/2;} }
+  const twoCols = gap > (xs[xs.length-1]-xs[0])*0.25;
+  items.forEach(z=>{ z.col = twoCols && z.cx>cut ? 1 : 0; });
+  items.sort((a,b)=>a.col-b.col || a.cy-b.cy);
+  const nums=items.filter(z=>!z.pct), pcts=items.filter(z=>z.pct);
+  // porcentagens: na coluna da direita = dano; na da esquerda = velocidade
+  const pR=pcts.filter(z=>z.col===1), pL=pcts.filter(z=>z.col===0);
+  if(pR.length) o.valores.dano=pR[0].v; else if(pcts.length) o.valores.dano=pcts[pcts.length-1].v;
+  if(pL.length && pR.length) o.valores.velocidade=pL[0].v;
+  // ordem do card: esquerda Vida, Peso, Oxigênio, Torpor; direita Estamina, Comida
+  o._nums=nums.map(z=>z.v);
+  o._ordem=[0,7,3,2,1,4];
+  return o;
+}
+function ocrKey(i){ return {0:"vida",1:"estamina",2:"torpor",3:"oxigenio",4:"comida",7:"peso",8:"dano",9:"velocidade",11:"criacao"}[i]; }
+function ocrColors(L){
+  // junta elementos por altura e procura 6 inteiros 0–255 lado a lado
+  const els=[]; L.forEach(l=>(l.e&&l.e.length?l.e:[l]).forEach(e=>{ const t=String(e.t||"").trim(); if(/^\d{1,3}$/.test(t) && +t<=255) els.push({n:+t, x:e.x||0, cy:(e.y||0)+(e.h||10)/2, h:e.h||10}); }));
+  els.sort((a,b)=>a.cy-b.cy);
+  for(let i=0;i<els.length;i++){
+    const row=els.filter(z=>Math.abs(z.cy-els[i].cy)<els[i].h*0.6).sort((a,b)=>a.x-b.x);
+    if(row.length===6) return row.map(z=>z.n);
+  }
+  return null;
+}
+
+/* Card do cryopod: escolhe a distribuição dos números entre os status que fecha com a espécie */
+function assignCryopod(o, s, origem, ib){
+  if(!o._nums || !s) return o;
+  const need=inputStats(s).filter(x=>!PERCENT.has(x.i)).map(x=>x.i);
+  const nums=o._nums.slice(0,8);
+  const prior=o._ordem.filter(i=>need.includes(i)).concat(need.filter(i=>!o._ordem.includes(i)));
+  let best=null;
+  const ibF=(ib||0)/100;
+  const score=(asg)=>{
+    let sc=0, sumW=0, tor=null;
+    for(const [i,v] of Object.entries(asg)){
+      const r=quickPoints(s,+i,origem,v,null,ibF);
+      if(r && r.exact){ sc+=10; if(+i===ST.TO) tor=r.w; else sumW+=r.w; } else if(r && r.needTE){ sc+=5; }
+    }
+    if(tor!=null && sumW===tor) sc+=15; // soma fecha com o torpor
+    prior.forEach((i,k)=>{ if(asg[i]===nums[k]) sc+=1; });
+    return sc;
+  };
+  // permutações (no máximo 6 números -> 720)
+  const k=Math.min(need.length, nums.length);
+  const perm=(arr,n,cur,used)=>{
+    if(cur.length===n){ const asg={}; cur.forEach((v,j)=>asg[prior[j]]=v); const sc=score(asg); if(!best||sc>best.sc) best={sc,asg}; return; }
+    for(let j=0;j<arr.length;j++){ if(used[j]) continue; used[j]=true; cur.push(arr[j]); perm(arr,n,cur,used); cur.pop(); used[j]=false; }
+  };
+  if(k>0) perm(nums,k,[],[]);
+  if(best) for(const [i,v] of Object.entries(best.asg)) o.valores[ocrKey(+i)]=v;
+  return o;
+}
+
+async function readPhotoOnDevice(file){
+  const fn=ocrNative(); if(!fn) throw {code:"sem_ocr", message:"plugin de leitura não encontrado"};
+  const blob=await shrink(file);
+  const b64=await blobToBase64(blob);
+  const res=await fn({base64:b64});
+  return res;
+}
+
 
 /* ===================== ARMAZENAMENTO =====================
  Nuvem (db do artifact) + espelho local para abrir rápido / sem internet */
@@ -682,7 +838,7 @@ function viewAdd(){
   const isEdit=state.creatures.has(c.id);
   let h='<h2 style="margin:6px 2px 4px">'+(isEdit?"Editar criatura":"Nova criatura")+'</h2>';
   // foto
-  h+='<div id="photoWrap"><div class="photo" id="photoBox" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><div class="grow"><b>Ler da foto da tela</b><div class="note" style="margin:2px 0 0">Tire uma foto da TV com o painel de status aberto. Escolha antes a espécie e a origem; os campos são preenchidos para você revisar.</div></div><span class="btn filebtn pri" style="flex:none">Foto<input id="photoIn" type="file" accept="image/*"></span></div><div class="paste" id="pasteBox" contenteditable="true" inputmode="none">ou toque aqui, segure e escolha <b>Colar</b> para usar uma imagem copiada</div></div>';
+  h+='<div id="photoWrap"><div class="photo" id="photoBox" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><div class="grow"><b>Ler da foto da tela</b><div class="note" style="margin:2px 0 0">Tire uma foto da TV ou um print do painel de status (inventário ou card do cryopod). Os campos são preenchidos para você revisar.</div></div><span class="btn filebtn pri" style="flex:none">Foto<input id="photoIn" type="file" accept="image/*"></span></div><div class="paste" id="pasteBox" contenteditable="true" inputmode="none">ou toque aqui, segure e escolha <b>Colar</b> para usar uma imagem copiada</div></div>';
   // espécie
   h+='<label class="f">Espécie</label><div id="spBox"></div>';
   if(s){
@@ -915,10 +1071,25 @@ async function setupPhoto(){
   };
   const handlePhoto=async f=>{
     if(!f) return;
-    if(!sample && IS_APK){
-      const url=URL.createObjectURL(f);
-      const ov=sheet('<h3 style="margin:0 0 8px">Imagem recebida ✓</h3><img src="'+url+'" style="width:100%;max-height:50vh;object-fit:contain;border-radius:10px;background:#000"><p class="note">O seletor de fotos está funcionando no APK. A leitura automática dos valores entra na próxima versão; por enquanto, digite os valores.</p><button class="btn pri" style="width:100%">Ok</button>',{center:true});
-      ov.querySelector("button").onclick=()=>{ URL.revokeObjectURL(url); ov.remove(); };
+    if(IS_APK){
+      const ov=sheet('<div class="row"><div class="spin"></div><div>Lendo a foto no celular…</div></div>',{center:true});
+      try{
+        const res=await readPhotoOnDevice(f); state.lastOcr=res;
+        const o=parseOcr(res);
+        const c=state.editing;
+        let s=byBp[c.sp];
+        if(!s && o.especie){ const t0=norm(o.especie); s=SPECIES.find(x=>norm(x.n)===t0 && !x.v.length)||SPECIES.find(x=>norm(x.n)===t0); }
+        if(o._modo==="cryopod" && s){
+          const origem=((o.mutM||0)+(o.mutP||0))>0 ? "criado" : (c.origem||"domesticado");
+          assignCryopod(o, s, origem, o.impressao!=null?o.impressao:c.ib);
+        }
+        delete o._nums; delete o._ordem;
+        ov.remove();
+        if(!Object.keys(o.valores).length && !o.especie && !o.nivel){ toast("Não encontrei números na foto. Tente uma foto mais reta e nítida."); showOcrLink(); return; }
+        c.modo="valores";
+        applyPhoto(o);
+        showOcrLink();
+      }catch(err){ ov.remove(); explica("falha", (err&&err.code||"erro")+" · "+(err&&err.message||String(err))); }
       return;
     }
     if(!sample){ explica(motivo||"sem_capacidade"); return; }
@@ -981,6 +1152,16 @@ async function setupPhoto(){
     });
     pb.addEventListener("input",()=>setTimeout(resetTxt,10));
   }
+}
+function showOcrLink(){
+  const box=document.getElementById("photoWrap"); if(!box || !state.lastOcr || document.getElementById("ocrLink")) return;
+  const b=document.createElement("button"); b.id="ocrLink"; b.className="btn ghost"; b.style.cssText="width:100%;margin-top:6px;font-size:13px";
+  b.textContent="Ver texto lido da última foto"; box.appendChild(b);
+  b.onclick=()=>{ const txt=(state.lastOcr.lines||[]).map(l=>l.t+"  @"+l.x+","+l.y).join("\n");
+    const ov=sheet('<h3 style="margin:0 0 8px">Texto que o celular leu</h3><p class="note" style="margin-top:0">Se a leitura errou, copie e mande para o Claude no chat.</p><textarea rows="12" readonly style="font-family:monospace;font-size:12px">'+esc(txt)+'</textarea><div class="row" style="margin-top:8px"><button class="btn grow" data-c>Copiar</button><button class="btn pri grow" data-x>Fechar</button></div>');
+    ov.querySelector("[data-x]").onclick=()=>ov.remove();
+    ov.querySelector("[data-c]").onclick=async()=>{ try{ await navigator.clipboard.writeText(txt); toast("Copiado!"); }catch(e){ ov.querySelector("textarea").select(); toast("Selecione e copie o texto."); } };
+  };
 }
 function shrink(file){
   return new Promise((res,rej)=>{

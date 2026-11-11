@@ -31,6 +31,11 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Adicionar leitura de texto no aparelho (Google ML Kit)
+        run: |
+          cp native/OcrPlugin.java native/MainActivity.java android/app/src/main/java/com/chicosl/arkbreeding/
+          printf "\ndependencies {\n    implementation 'com.google.mlkit:text-recognition:16.0.1'\n}\n" >> android/app/build.gradle
+
       - name: Compilar APK (debug)
         working-directory: android
         run: |
