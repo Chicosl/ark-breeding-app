@@ -1,16 +1,35 @@
-# Ark Breeding (Android)
+# Breeding Companion para ARK (Android)
 
-App de celular para **ARK: Survival Ascended**, inspirado no ARK Smart Breeding:
-biblioteca de criaturas, extrator de pontos a partir dos valores da tela, cores por região e ilustrações.
+App de fã, **não oficial**, para **ARK: Survival Ascended**, inspirado no ARK Smart Breeding.
 
-## Como baixar o APK
-1. Abra a aba **Releases** deste repositório.
-2. Baixe o arquivo `ark-breeding.apk` da versão mais recente.
-3. No Android, permita "instalar apps de fontes desconhecidas" para o navegador e instale.
+- **Extrator de pontos:** digite (ou leia da foto) os valores de status e o app descobre os pontos selvagens, de mutação e do jogador, a efetividade da doma e a impressão.
+- **Leitura da foto da tela** (inventário ou card do cryopod), feita no próprio celular com o Google ML Kit, sem internet. Câmera ou galeria.
+- **Biblioteca** com cores por região e ilustrações coloridas; importa o backup `.asb` do ARK Smart Breeding.
+- **Melhores por status, plano de cria e chance de mutação.**
+- Multiplicadores oficiais de status.
 
-O APK é gerado automaticamente pelo GitHub Actions (`.github/workflows/build-apk.yml`) a cada alteração.
+## Como instalar
+1. Abra a página de [**Releases**](https://github.com/Chicosl/ark-breeding-app/releases/latest).
+2. Baixe `breeding-companion.apk` (em *Assets*) no celular e abra o arquivo.
+3. Se o Android pedir, permita que o navegador ou o app de arquivos instale apps.
 
-## Créditos
-- Dados das espécies e lógica de cálculo: [ARK Smart Breeding](https://github.com/cadon/ARKStatsExtractor) (MIT).
+Para atualizar, instale a versão nova por cima. Antes de desinstalar, salve um backup em **Mais → Backup**.
+
+## Problemas e sugestões
+Abra uma [issue](https://github.com/Chicosl/ark-breeding-app/issues). Para erros de leitura de foto, mande a foto e o texto de "Ver texto lido".
+
+## Privacidade
+O app não coleta nenhum dado. Veja [PRIVACIDADE.md](PRIVACIDADE.md).
+
+## Para quem mantém o projeto
+- O APK é gerado pelo GitHub Actions (`.github/workflows/build-apk.yml`) a cada alteração na `main` e publicado em Releases.
+- A pasta `assinatura/` guarda a chave fixa de assinatura, protegida por senha. A senha fica no segredo `KEYSTORE_PASSWORD` do repositório e nunca vai para o código. Sem essa chave não é possível publicar atualizações por cima das instalações existentes.
+- Impressão digital (SHA-256) do certificado: `00:FB:58:94:C1:BF:76:20:07:D3:EC:54:D8:5C:8B:05:4E:A3:8D:7C:33:08:92:8E:BE:62:45:55:EF:61:32:3A`
+
+## Créditos e licença
+- Código do app: licença MIT ([LICENSE](LICENSE)).
+- Dados das espécies e cálculo dos status: [ARK Smart Breeding](https://github.com/cadon/ARKStatsExtractor) (MIT).
 - Ilustrações das espécies: [arkutils/species-images](https://github.com/arkutils/species-images) (MIT).
-- App não oficial, sem ligação com a Studio Wildcard.
+- Leitura de texto: Google ML Kit.
+
+ARK: Survival Ascended é marca da Studio Wildcard. Este app não tem ligação com a Studio Wildcard nem é endossado por ela.

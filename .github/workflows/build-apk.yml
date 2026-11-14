@@ -11,8 +11,18 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      APP_VERSION: 1.0.${{ github.run_number }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Conferir a senha da chave de assinatura
+        run: |
+          if [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Falta o segredo KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -26,38 +36,77 @@ jobs:
       - name: Instalar dependências
         run: npm install
 
+      - name: Marcar a versão no app
+        run: sed -i "s/__APPVER__/$APP_VERSION/g" www/index.html
+
       - name: Criar projeto Android
         run: |
           npx cap add android
           npx cap sync android
 
-      - name: Adicionar leitura de texto no aparelho (Google ML Kit)
+      - name: Código nativo (leitura de foto com Google ML Kit e backup)
         run: |
-          cp native/OcrPlugin.java native/MainActivity.java android/app/src/main/java/com/chicosl/arkbreeding/
+          cp native/*.java android/app/src/main/java/com/chicosl/breedingcompanion/
           printf "\ndependencies {\n    implementation 'com.google.mlkit:text-recognition:16.0.1'\n}\n" >> android/app/build.gradle
           # Android 11+: permite enxergar o app de câmera (botão "Câmera" abre a câmera direto)
           sed -i 's#<application#<queries>\n        <intent>\n            <action android:name="android.media.action.IMAGE_CAPTURE" />\n        </intent>\n    </queries>\n\n    <application#' android/app/src/main/AndroidManifest.xml
           grep -n "IMAGE_CAPTURE" android/app/src/main/AndroidManifest.xml
+          cat android/app/src/main/res/xml/file_paths.xml
 
-      - name: Compilar APK (debug)
+      - name: Versão e assinatura fixa
+        run: |
+          cat >> android/app/build.gradle <<GRADLE
+
+          android {
+              defaultConfig {
+                  versionCode ${{ github.run_number }}
+                  versionName "$APP_VERSION"
+              }
+              signingConfigs {
+                  release {
+                      storeFile file("../../assinatura/release.jks")
+                      storePassword System.getenv("KEYSTORE_PASSWORD")
+                      keyAlias "breedingcompanion"
+                      keyPassword System.getenv("KEYSTORE_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+              lint {
+                  checkReleaseBuilds false
+                  abortOnError false
+              }
+          }
+          GRADLE
+          tail -30 android/app/build.gradle
+
+      - name: Compilar APK de lançamento
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
-      - name: Renomear APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk ark-breeding.apk
+      - name: Conferir assinatura
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk breeding-companion.apk
+          APKSIGNER=$(ls $ANDROID_HOME/build-tools/*/apksigner | sort -V | tail -1)
+          $APKSIGNER verify --print-certs breeding-companion.apk | tee assinatura.txt
+          grep -qi "00fb5894c1bf762007d3ec54d85c8b054ea38d7c3308928ebe624555ef61323a" assinatura.txt
 
       - name: Guardar APK nos artefatos
         uses: actions/upload-artifact@v4
         with:
-          name: ark-breeding-apk
-          path: ark-breeding.apk
+          name: breeding-companion-apk
+          path: breeding-companion.apk
 
       - name: Publicar na página de Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: apk-${{ github.run_number }}
-          name: Ark Breeding APK ${{ github.run_number }}
-          body: APK de teste gerado automaticamente a partir do commit ${{ github.sha }}.
-          files: ark-breeding.apk
+          tag_name: v${{ env.APP_VERSION }}
+          name: Breeding Companion ${{ env.APP_VERSION }}
+          body_path: .github/release-notes.md
+          files: breeding-companion.apk
+          make_latest: true

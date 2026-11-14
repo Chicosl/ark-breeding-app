@@ -1,4 +1,4 @@
-package com.chicosl.arkbreeding;
+package com.chicosl.breedingcompanion;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;

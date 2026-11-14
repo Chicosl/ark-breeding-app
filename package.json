@@ -1,6 +1,6 @@
 {
-  "name": "ark-breeding-app",
-  "version": "0.1.0",
+  "name": "breeding-companion",
+  "version": "1.0.0",
   "private": true,
   "description": "Biblioteca e extrator de pontos para ARK: Survival Ascended (app Android via Capacitor)",
   "scripts": {

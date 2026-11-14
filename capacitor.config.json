@@ -1,6 +1,6 @@
 {
-  "appId": "com.chicosl.arkbreeding",
-  "appName": "Ark Breeding",
+  "appId": "com.chicosl.breedingcompanion",
+  "appName": "Breeding Companion",
   "webDir": "www",
   "android": {
     "allowMixedContent": false

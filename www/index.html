@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Ark Breeding — Biblioteca de Criaturas</title>
+<title>Breeding Companion para ARK</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -169,13 +169,15 @@ td .who{font-size:12px;color:var(--mut)}
 a{color:var(--amber)}
 .muted{color:var(--mut)}
 .warnbox{background:#2b2214;border:1px solid #5a4520;color:#f6d79c;border-radius:12px;padding:10px 12px;font-size:13px;margin:8px 0}
+.h1sub{display:block;font-size:10px;font-weight:500;letter-spacing:.3px;opacity:.6;margin-top:1px}
+.aboutlist{margin:6px 0 0;padding-left:18px}.aboutlist li{margin:3px 0}
 </style>
 </head>
 <body>
 <header>
   <div class="brand">
     <svg width="30" height="30" viewBox="0 0 32 32" fill="none"><path d="M16 3c5 4 9 8 9 14a9 9 0 1 1-18 0c0-6 4-10 9-14z" fill="#f2a93b"/><path d="M11 18c2 3 8 3 10 0" stroke="#1a1205" stroke-width="2.2" stroke-linecap="round"/><circle cx="12.5" cy="14" r="1.6" fill="#1a1205"/><circle cx="19.5" cy="14" r="1.6" fill="#1a1205"/></svg>
-    <h1>Ark <span>Breeding</span></h1>
+    <h1>Breeding <span>Companion</span><small class="h1sub">para ARK · app de fã</small></h1>
     <div class="sync" id="sync"><span class="dot" id="syncdot"></span><span id="synctxt">conectando…</span></div>
   </div>
 </header>
@@ -713,6 +715,7 @@ function fmtPct(p){ const v=p*100; return (v>=10?v.toFixed(0):v>=1?v.toFixed(1):
 /* ===================== ARMAZENAMENTO =====================
  Nuvem (db do artifact) + espelho local para abrir rápido / sem internet */
 const LS_KEY="arkbreeding.v1";
+const APP_VERSION = "__APPVER__".indexOf("__")===0 ? "dev" : "__APPVER__";
 const IS_APK = !!(window.Capacitor && (typeof window.Capacitor.isNativePlatform!=="function" || window.Capacitor.isNativePlatform()));
 const state = { creatures:new Map(), view:"lib", spFilter:"", search:"", sortStat:-1, bestSp:"", db:null, col:null, online:false, loaded:false, editing:null };
 function lsLoad(){ try{ const j=JSON.parse(localStorage.getItem(LS_KEY)||"{}"); (j.c||[]).forEach(c=>state.creatures.set(c.id,c)); state.pendingDel=j.del||[]; }catch(e){ state.pendingDel=[]; } }
@@ -1252,7 +1255,7 @@ async function setupPhoto(){
 function openOcrText(){
   if(!state.lastOcr) return;
   const txt=(state.lastOcr.lines||[]).map(l=>l.t+"  @"+l.x+","+l.y).join("\n")||"(nenhum texto)";
-  const ov=sheet('<h3 style="margin:0 0 8px">Texto que o celular leu</h3><p class="note" style="margin-top:0">Se a leitura errou, copie e mande para o Claude no chat.</p><textarea rows="12" readonly style="font-family:monospace;font-size:12px">'+esc(txt)+'</textarea><div class="row" style="margin-top:8px"><button class="btn grow" data-c>Copiar</button><button class="btn pri grow" data-x>Fechar</button></div>');
+  const ov=sheet('<h3 style="margin:0 0 8px">Texto que o celular leu</h3><p class="note" style="margin-top:0">Se a leitura errou, copie este texto e mande junto com a foto ao <a href="https://github.com/Chicosl/ark-breeding-app/issues">relatar o problema</a>.</p><textarea rows="12" readonly style="font-family:monospace;font-size:12px">'+esc(txt)+'</textarea><div class="row" style="margin-top:8px"><button class="btn grow" data-c>Copiar</button><button class="btn pri grow" data-x>Fechar</button></div>');
   ov.querySelector("[data-x]").onclick=()=>ov.remove();
   ov.querySelector("[data-c]").onclick=async()=>{ try{ await navigator.clipboard.writeText(txt); toast("Copiado!"); }catch(e){ const ta=ov.querySelector("textarea"); ta.removeAttribute("readonly"); ta.focus(); ta.select(); try{ document.execCommand("copy"); toast("Copiado!"); }catch(e2){ toast("Selecione e copie o texto."); } } };
 }
@@ -1351,16 +1354,24 @@ function viewBest(){
 async function viewCfg(){
   const n=state.creatures.size;
   let h='<h2 style="margin:6px 2px 8px">Mais</h2>';
-  h+='<div class="card"><h3 style="margin:0 0 4px">Backup</h3><p class="note" style="margin-top:0">'+n+' criatura'+(n===1?"":"s")+' na biblioteca. Guarde uma cópia de vez em quando.</p><div class="row wrap"><button class="btn pri grow" id="exp">Exportar arquivo</button><button class="btn grow" id="copy">Copiar como texto</button><span class="btn filebtn grow" style="text-align:center">Importar arquivo<input type="file" id="imp" accept=".json,application/json"></span></div></div>';
+  h+='<div class="card"><h3 style="margin:0 0 4px">Backup</h3><p class="note" style="margin-top:0">'+n+' criatura'+(n===1?"":"s")+' na biblioteca. Guarde uma cópia de vez em quando. <b>Antes de desinstalar o app, salve um backup:</b> a biblioteca fica só no celular.</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn pri grow" id="exp">Exportar arquivo</button><button class="btn grow" id="shareBk" style="display:none">Compartilhar</button><button class="btn grow" id="copy">Copiar como texto</button><span class="btn filebtn grow" style="text-align:center">Importar arquivo<input type="file" id="imp" accept=".json,application/json"></span></div></div>';
   h+='<div class="card"><h3 style="margin:0 0 4px">Trazer do ARK Smart Breeding</h3><p class="note" style="margin-top:0">Importa a biblioteca de um arquivo <b>.asb</b> (no ASB: File → Save as…). Pontos selvagens, de mutação e do jogador, sexo, impressão, pais e situação vêm junto. Importar de novo o mesmo arquivo atualiza, não duplica.</p><span class="btn filebtn pri" style="display:block;text-align:center">Escolher arquivo .asb<input type="file" id="impAsb" accept="*/*"></span></div>';
   h+='<div class="card"><h3 style="margin:0 0 4px">Servidor</h3><p style="margin:0">Multiplicadores <b>oficiais</b> de status.</p><p class="note">Vida: TaM 0,14 · TmM 0,44 · IdM 0,2 — Dano: TaM 0,14 · TmM 0,44 · IdM 0,17. Os pontos que você digita não dependem disso; só o valor calculado.</p></div>';
-  h+='<div class="card"><h3 style="margin:0 0 4px">Sobre</h3><p class="note" style="margin-top:0">App não oficial, feito por fãs para ARK: Survival Ascended. Não tem ligação com a Studio Wildcard.<br>Dados das espécies: <a href="https://github.com/cadon/ARKStatsExtractor">ARK Smart Breeding</a> (licença MIT), extraídos pelo projeto arkutils. Versão dos dados: ASA '+esc(DATA_INFO.asa)+' · base '+esc(DATA_INFO.base)+' · '+SPECIES.length+' espécies.</p></div>';
+  h+='<div class="card"><h3 style="margin:0 0 4px">Sobre</h3><p style="margin:0 0 6px"><b>Breeding Companion para ARK</b> · versão '+esc(APP_VERSION)+'</p><p class="note" style="margin-top:0"><b>App de fã, não oficial.</b> Não tem ligação com a Studio Wildcard nem é endossado por ela. ARK: Survival Ascended é marca da Studio Wildcard.</p><p class="note"><b>Privacidade:</b> o app não coleta nem envia nenhum dado. A biblioteca fica só no seu celular, e a leitura das fotos é feita no próprio aparelho.</p><p class="note" style="margin-bottom:0">Créditos:</p><ul class="note aboutlist"><li>Dados das espécies e cálculo dos status: <a href="https://github.com/cadon/ARKStatsExtractor">ARK Smart Breeding</a> (licença MIT).</li><li>Ilustrações coloridas: <a href="https://github.com/arkutils/species-images">arkutils/species-images</a> (licença MIT).</li><li>Leitura de texto nas fotos: Google ML Kit.</li></ul><p class="note">Dados: ASA '+esc(DATA_INFO.asa)+' · base '+esc(DATA_INFO.base)+' · '+SPECIES.length+' espécies.</p><p class="note" style="margin-bottom:0"><a href="https://github.com/Chicosl/ark-breeding-app/releases">Baixar a versão mais recente</a> · <a href="https://github.com/Chicosl/ark-breeding-app/issues">Relatar problema ou sugerir</a></p></div>';
   $main.innerHTML=h;
   const payload=()=>JSON.stringify({app:"ark-breeding",versao:1,exportado:new Date().toISOString(),criaturas:[...state.creatures.values()].map(clean)},null,1);
   let downloads=null; try{ downloads=await window.claude?.use?.("downloads"); }catch(e){}
   const expBtn=document.getElementById("exp"); if(!expBtn) return;
-  if(!downloads) expBtn.style.display="none";
-  expBtn.onclick=async()=>{ try{ await downloads.save({filename:"ark-breeding-backup-"+new Date().toISOString().slice(0,10)+".json", data:payload(), mimeType:"application/json"}); }catch(e){ toast("Download cancelado ou indisponível. Use “Copiar como texto”."); } };
+  const bkName=()=>"breeding-companion-backup-"+new Date().toISOString().slice(0,10)+".json";
+  const nat=(m,o)=>window.Capacitor.nativePromise("Arquivo",m,o);
+  if(IS_APK && window.Capacitor && typeof window.Capacitor.nativePromise==="function"){
+    expBtn.textContent="Salvar arquivo";
+    expBtn.onclick=async()=>{ try{ const r=await nat("save",{filename:bkName(),data:payload(),mimeType:"application/json"}); if(r&&r.saved) toast("Backup salvo."); }catch(e){ toast("Não consegui salvar. Tente “Compartilhar” ou “Copiar como texto”."); } };
+    const sb=document.getElementById("shareBk"); sb.style.display="";
+    sb.onclick=async()=>{ try{ await nat("share",{filename:bkName(),data:payload(),mimeType:"application/json"}); }catch(e){ toast("Não consegui compartilhar. Use “Copiar como texto”."); } };
+    downloads=null;
+  } else if(!downloads) expBtn.style.display="none";
+  if(!IS_APK) expBtn.onclick=async()=>{ try{ await downloads.save({filename:"ark-breeding-backup-"+new Date().toISOString().slice(0,10)+".json", data:payload(), mimeType:"application/json"}); }catch(e){ toast("Download cancelado ou indisponível. Use “Copiar como texto”."); } };
   document.getElementById("copy").onclick=async()=>{ try{ await navigator.clipboard.writeText(payload()); toast("Copiado! Cole num e-mail ou nota para guardar."); }catch(e){ const ov=sheet('<p class="note">Copie o texto abaixo:</p><textarea rows="10" readonly>'+esc(payload())+'</textarea><button class="btn" style="margin-top:8px;width:100%">Fechar</button>'); ov.querySelector("button").onclick=()=>ov.remove(); } };
   document.getElementById("impAsb").onchange=async e=>{
     const f=e.target.files[0]; if(!f) return; e.target.value="";
