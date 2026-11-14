@@ -1354,7 +1354,7 @@ function viewBest(){
 async function viewCfg(){
   const n=state.creatures.size;
   let h='<h2 style="margin:6px 2px 8px">Mais</h2>';
-  h+='<div class="card"><h3 style="margin:0 0 4px">Backup</h3><p class="note" style="margin-top:0">'+n+' criatura'+(n===1?"":"s")+' na biblioteca. Guarde uma cópia de vez em quando. <b>Antes de desinstalar o app, salve um backup:</b> a biblioteca fica só no celular.</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn pri grow" id="exp">Exportar arquivo</button><button class="btn grow" id="shareBk" style="display:none">Compartilhar</button><button class="btn grow" id="copy">Copiar como texto</button><span class="btn filebtn grow" style="text-align:center">Importar arquivo<input type="file" id="imp" accept=".json,application/json"></span></div></div>';
+  h+='<div class="card"><h3 style="margin:0 0 4px">Backup</h3><p class="note" style="margin-top:0">'+n+' criatura'+(n===1?"":"s")+' na biblioteca. Guarde uma cópia de vez em quando. <b>Antes de desinstalar o app, salve um backup:</b> a biblioteca fica só no celular.</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn pri grow" id="exp">Exportar arquivo</button><button class="btn grow" id="shareBk" style="display:none">Compartilhar</button><button class="btn grow" id="copy">Copiar como texto</button><span class="btn filebtn grow" style="text-align:center">Importar arquivo<input type="file" id="imp" accept=".json,application/json"></span></div><button class="btn" id="pasteBk" style="width:100%;margin-top:8px">Colar backup copiado como texto</button></div>';
   h+='<div class="card"><h3 style="margin:0 0 4px">Trazer do ARK Smart Breeding</h3><p class="note" style="margin-top:0">Importa a biblioteca de um arquivo <b>.asb</b> (no ASB: File → Save as…). Pontos selvagens, de mutação e do jogador, sexo, impressão, pais e situação vêm junto. Importar de novo o mesmo arquivo atualiza, não duplica.</p><span class="btn filebtn pri" style="display:block;text-align:center">Escolher arquivo .asb<input type="file" id="impAsb" accept="*/*"></span></div>';
   h+='<div class="card"><h3 style="margin:0 0 4px">Servidor</h3><p style="margin:0">Multiplicadores <b>oficiais</b> de status.</p><p class="note">Vida: TaM 0,14 · TmM 0,44 · IdM 0,2 — Dano: TaM 0,14 · TmM 0,44 · IdM 0,17. Os pontos que você digita não dependem disso; só o valor calculado.</p></div>';
   h+='<div class="card"><h3 style="margin:0 0 4px">Sobre</h3><p style="margin:0 0 6px"><b>Breeding Companion para ARK</b> · versão '+esc(APP_VERSION)+'</p><p class="note" style="margin-top:0"><b>App de fã, não oficial.</b> Não tem ligação com a Studio Wildcard nem é endossado por ela. ARK: Survival Ascended é marca da Studio Wildcard.</p><p class="note"><b>Privacidade:</b> o app não coleta nem envia nenhum dado. A biblioteca fica só no seu celular, e a leitura das fotos é feita no próprio aparelho.</p><p class="note" style="margin-bottom:0">Créditos:</p><ul class="note aboutlist"><li>Dados das espécies e cálculo dos status: <a href="https://github.com/cadon/ARKStatsExtractor">ARK Smart Breeding</a> (licença MIT).</li><li>Ilustrações coloridas: <a href="https://github.com/arkutils/species-images">arkutils/species-images</a> (licença MIT).</li><li>Leitura de texto nas fotos: Google ML Kit.</li></ul><p class="note">Dados: ASA '+esc(DATA_INFO.asa)+' · base '+esc(DATA_INFO.base)+' · '+SPECIES.length+' espécies.</p><p class="note" style="margin-bottom:0"><a href="https://github.com/Chicosl/ark-breeding-app/releases">Baixar a versão mais recente</a> · <a href="https://github.com/Chicosl/ark-breeding-app/issues">Relatar problema ou sugerir</a></p></div>';
@@ -1383,6 +1383,21 @@ async function viewCfg(){
     const ov=sheet('<div class="row"><div class="spin"></div><div id="impProg">Importando…</div></div>',{center:true});
     let n=0; for(const c of list){ await saveCreature(c); n++; const el=document.getElementById("impProg"); if(el) el.textContent="Importando… "+n+"/"+list.length; }
     ov.remove(); toast(n+" criatura(s) importada(s)."); state.view="lib"; render();
+  };
+  const importList=async(j)=>{
+    const list=(j.criaturas||j.c||[]).filter(x=>x&&x.id&&x.sp);
+    if(!list.length){ toast("Nenhuma criatura nesse backup."); return false; }
+    if(!(await confirmDlg("Importar "+list.length+" criatura(s)? As que já existem com o mesmo código serão atualizadas.","Importar"))) return false;
+    for(const c of list) await saveCreature(c);
+    toast(list.length+" importada(s)."); viewCfg(); return true;
+  };
+  document.getElementById("pasteBk").onclick=()=>{
+    const ov=sheet('<h3 style="margin:0 0 6px">Colar backup</h3><p class="note" style="margin-top:0">Cole aqui o texto copiado em “Copiar como texto” (também serve o da versão antiga do app).</p><textarea id="pasteTxt" rows="8" placeholder="{&quot;app&quot;:…"></textarea><div class="row" style="margin-top:8px;gap:8px"><button class="btn grow" id="pasteCancel">Cancelar</button><button class="btn pri grow" id="pasteOk">Importar</button></div>');
+    ov.querySelector("#pasteCancel").onclick=()=>ov.remove();
+    ov.querySelector("#pasteOk").onclick=async()=>{
+      let j; try{ j=JSON.parse(ov.querySelector("#pasteTxt").value.trim()); }catch(err){ toast("Esse texto não é um backup válido. Copie de novo, inteiro."); return; }
+      ov.remove(); await importList(j);
+    };
   };
   document.getElementById("imp").onchange=async e=>{
     const f=e.target.files[0]; if(!f) return;
