@@ -27,7 +27,7 @@ O app não coleta nenhum dado. Veja [PRIVACIDADE.md](PRIVACIDADE.md).
 - Impressão digital (SHA-256) do certificado: `00:FB:58:94:C1:BF:76:20:07:D3:EC:54:D8:5C:8B:05:4E:A3:8D:7C:33:08:92:8E:BE:62:45:55:EF:61:32:3A`
 
 ## Créditos e licença
-- Código do app: licença MIT ([LICENSE](LICENSE)).
+- Código do app: licença MIT ([LICENSE](LICENSE)). Mantido por ChicoLemke.
 - Dados das espécies e cálculo dos status: [ARK Smart Breeding](https://github.com/cadon/ARKStatsExtractor) (MIT).
 - Ilustrações das espécies: [arkutils/species-images](https://github.com/arkutils/species-images) (MIT).
 - Leitura de texto: Google ML Kit.
