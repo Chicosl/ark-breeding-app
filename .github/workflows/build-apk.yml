@@ -58,6 +58,18 @@ jobs:
           grep -n "IMAGE_CAPTURE" android/app/src/main/AndroidManifest.xml
           cat android/app/src/main/res/xml/file_paths.xml
 
+      - name: Ícone e tela de abertura
+        run: |
+          RES=android/app/src/main/res
+          find $RES -name 'splash.png' -delete
+          rm -f $RES/drawable-v24/ic_launcher_foreground.xml $RES/drawable/ic_launcher_foreground.xml
+          cp -r icones/res/* $RES/
+          if grep -q "Theme.SplashScreen" $RES/values/styles.xml; then
+            sed -i 's#<item name="android:background">@drawable/splash</item>#<item name="android:background">@drawable/splash</item>\n        <item name="windowSplashScreenBackground">\#10171B</item>\n        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>#' $RES/values/styles.xml
+          fi
+          cat $RES/values/styles.xml
+          ls $RES
+
       - name: Versão e assinatura fixa
         run: |
           cat >> android/app/build.gradle <<GRADLE
