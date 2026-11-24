@@ -25,6 +25,9 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 @CapacitorPlugin(name = "Ocr")
 public class OcrPlugin extends Plugin {
 
+    private static final int MAX_B64_CHARS = 28_000_000; // ~20 MB de imagem
+    private static final int MAX_SIDE = 4096;
+
     @PluginMethod
     public void read(PluginCall call) {
         String b64 = call.getString("base64");
@@ -32,10 +35,21 @@ public class OcrPlugin extends Plugin {
         int comma = b64.indexOf(',');
         if (b64.startsWith("data:") && comma > 0) b64 = b64.substring(comma + 1);
 
+        // limite de tamanho: base64 de até ~20 MB e lado maior de até ~4096 px (evita falta de memória)
+        if (b64.length() > MAX_B64_CHARS) { call.reject("imagem muito grande"); return; }
         final Bitmap bmp;
         try {
             byte[] bytes = Base64.decode(b64, Base64.DEFAULT);
-            bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) { call.reject("imagem inválida"); return; }
+            int sample = 1;
+            while (Math.max(bounds.outWidth, bounds.outHeight) / sample > MAX_SIDE) sample *= 2;
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, opts);
+        } catch (OutOfMemoryError e) { call.reject("imagem muito grande"); return;
         } catch (Exception e) { call.reject("imagem inválida: " + e.getMessage()); return; }
         if (bmp == null) { call.reject("imagem inválida"); return; }
 

@@ -1,3 +1,8 @@
 node_modules/
 android/
 *.apk
+# chaves e certificados nunca vão para o Git
+*.keystore
+*.p12
+*.pem
+*.jks
