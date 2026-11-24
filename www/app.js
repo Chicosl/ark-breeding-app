@@ -939,7 +939,7 @@ function viewAdd(){
     h+='<label class="f">Origem</label><div class="seg" id="origem">'+[["domesticado","Domesticado"],["criado","Criado"],["selvagem","Selvagem"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(c.origem===v?"on":"")+'">'+t+'</button>').join("")+'</div>';
     const modo=curMode(c);
     h+='<label class="f">Como informar</label><div class="seg" id="modo">'+[["valores","Pelos valores da tela"],["pontos","Já sei os pontos"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(modo===v?"on":"")+'">'+t+'</button>').join("")+'</div>';
-    if(c.origem==="domesticado") h+='<label class="f">Eficiência de domesticação (TE %) — '+(modo==="valores"?'<b style="color:var(--amber)">recomendado</b>: deixa o resultado mais certo':'opcional, só afeta o valor do dano')+'</label><input type="text" inputmode="decimal" id="te" value="'+(c.te??"")+'" placeholder="Ex.: 98,5">';
+    if(c.origem==="domesticado") h+='<label class="f">Eficiência de domesticação (TE %) — '+(modo==="valores"?'opcional. <b>Se não souber, deixe em branco</b>: o app calcula sozinho (não use a faixa "80–100" do Smart Breeding)':'opcional, só afeta o valor do dano')+'</label><input type="text" inputmode="decimal" id="te" value="'+(c.te??"")+'" placeholder="em branco = o app calcula">';
     if(c.origem==="criado") h+='<label class="f">Impressão (%)</label><input type="text" inputmode="decimal" id="ib" value="'+(c.ib??"")+'" placeholder="0 a 100">';
     if(c.origem==="domesticado") h+='<label class="f">Impressão (%) — só se aparecer na tela (ex.: habilidade do Lost Colony)</label><input type="text" inputmode="decimal" id="ib" value="'+(c.ib??"")+'" placeholder="0">';
     if(modo==="valores"){
@@ -1028,7 +1028,17 @@ function viewAdd(){
 }
 
 function curMode(c){ if(c.modo) return c.modo; return (state.creatures.has(c.id) && !c.vals) ? "pontos" : "valores"; }
-function exInvalidate(){ state.ex=null; renderEx(); }
+function exInvalidate(){ state.ex=null; renderEx(); autoExtract(); }
+let _autoT=null;
+function autoExtract(){
+  clearTimeout(_autoT);
+  _autoT=setTimeout(()=>{ const c=state.editing; if(!c||state.ex||curMode(c)!=="valores") return; const s=byBp[c.sp]; if(!s) return;
+    if(c.origem!=="selvagem" && !c.nivel) return;
+    const falta=inputStats(s).some(x=>(x.wild||x.dom||x.i===ST.TO) && !parseVal((c.vals||{})[x.i], PERCENT.has(x.i)));
+    if(falta || !document.getElementById("exMsg")) return;
+    runExtract(true);
+  }, 600);
+}
 function exResolved(){ const ex=state.ex; if(!ex||ex.err) return false; return currentSols().length===1 || allUnique(); }
 function currentSols(){ const ex=state.ex; if(!ex||!ex.solutions) return []; return ex.solutions.filter(so=>Object.entries(ex.picks).every(([i,k])=>{ const p=so.pts[i]; return p && (p[0]+"|"+p[2])===k; })); }
 function allUnique(){ const o=optionsByStat(currentSols()); return Object.values(o).every(m=>m.size===1); }
@@ -1050,17 +1060,19 @@ function setupValues(c,s){
     el.oninput=()=>{ c.vals[el.dataset.v]=el.value; el.classList.remove("miss"); el.classList.remove("unsure"); exInvalidate(); };
     el.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); const n=ins[ix+1]; if(n) n.focus(); else { el.blur(); runExtract(); } } };
   });
-  document.getElementById("exBtn").onclick=runExtract;
-  renderEx();
+  document.getElementById("exBtn").onclick=()=>runExtract(false);
+  renderEx(); autoExtract();
 }
-function runExtract(){
+function runExtract(auto){
   const c=state.editing, s=byBp[c.sp];
   const teHint = c.origem==="domesticado" ? c.te : null;
   // o nível mostrado no jogo não inclui os "pontos disponíveis" ainda não distribuídos (confirmado com um Baryonyx nível 217 com 41 pontos livres)
-  const r=extractLevels(s,c.origem,c.nivel,c.vals||{},teHint,c.ib);
-  state.ex = r.err ? {err:r.err, bad:r.bad||[]} : {solutions:r.solutions, picks:{}, relaxed:r.relaxed, userTE:teHint!=null};
+  let r=extractLevels(s,c.origem,c.nivel,c.vals||{},teHint,c.ib), teIgnorada=false;
+  if(r.err && teHint!=null){ const r2=extractLevels(s,c.origem,c.nivel,c.vals||{},null,c.ib); if(!r2.err){ r=r2; teIgnorada=true; } }
+  state.ex = r.err ? {err:r.err, bad:r.bad||[]} : {solutions:r.solutions, picks:{}, relaxed:r.relaxed, userTE:teHint!=null && !teIgnorada, teIgnorada: teIgnorada?teHint:null};
   renderEx();
-  if(!r.err && !exResolved()) toast("Alguns status têm mais de uma possibilidade. Toque nos amarelos para escolher.");
+  if(!r.err && !exResolved() && !auto) toast("Alguns status têm mais de uma possibilidade. Toque nos amarelos para escolher.");
+  if(teIgnorada){ const m=document.getElementById("exMsg"); if(m){ const d=document.createElement("div"); d.className="msg warn"; d.textContent="A TE informada ("+String(teHint).replace(".",",")+"%) não bate com os valores. O cálculo foi feito sem ela; a TE calculada aparece acima. Se quiser, apague o campo TE."; m.appendChild(d); } }
 }
 function renderEx(){
   const c=state.editing, s=byBp[c.sp]; if(!s) return;
