@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -130,3 +132,29 @@ jobs:
           body_path: .github/release-notes.md
           files: breeding-companion.apk
           make_latest: true
+
+      - name: Preparar página de download
+        if: env.HAS_KEY == 'true'
+        run: |
+          mkdir -p site
+          cp pagina/* site/
+          cp breeding-companion.apk site/
+          sed -i "s/__APPVER__/$APP_VERSION/g" site/index.html
+
+      - name: Enviar página de download
+        if: env.HAS_KEY == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  pagina:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Publicar no GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
