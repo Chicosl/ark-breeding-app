@@ -102,9 +102,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          sparse-checkout: |
-            assinatura
-            pagina
+          sparse-checkout: pagina
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -121,11 +119,8 @@ jobs:
           KS="$RUNNER_TEMP/assinatura.jks"
           if [ -n "$KS_PASS" ] && [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > "$KS"; ALIAS=breedingcompanion; OFICIAL=true
-          elif [ -n "$KS_PASS" ] && [ -f assinatura/release.jks ]; then
-            echo "::warning::Usando a chave da pasta assinatura/ (transição). Cadastre o segredo KEYSTORE_B64."
-            cp assinatura/release.jks "$KS"; ALIAS=breedingcompanion; OFICIAL=true
-          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ] && [ -z "$KS_PASS" ]; then
-            echo "::error::Falta o segredo KEYSTORE_PASSWORD."; exit 1
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "::error::Faltam os segredos KEYSTORE_B64 e/ou KEYSTORE_PASSWORD."; exit 1
           else
             echo "::warning::Sem chave oficial: gerando APK de teste com chave descartável (não publicado)."
             KS_PASS=$(openssl rand -hex 24); ALIAS=teste; OFICIAL=false
