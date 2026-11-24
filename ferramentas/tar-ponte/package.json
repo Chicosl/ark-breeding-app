@@ -1,0 +1,8 @@
+{
+  "name": "tar",
+  "version": "7.5.23-ponte",
+  "private": true,
+  "description": "Ponte: entrega o tar 7 corrigido no formato (export default) que o @capacitor/cli 6 espera.",
+  "main": "index.js",
+  "dependencies": { "tar-corrigido": "npm:tar@7.5.23" }
+}

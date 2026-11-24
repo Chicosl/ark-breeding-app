@@ -11,6 +11,13 @@
     "@capacitor/core": "6.2.3"
   },
   "devDependencies": {
-    "@capacitor/cli": "6.2.3"
+    "@capacitor/cli": "6.2.3",
+    "tar": "file:ferramentas/tar-ponte"
+  },
+  "overrides": {
+    "tar": "$tar",
+    "glob": "14.0.6",
+    "minimatch": "11.0.9",
+    "rimraf": "6.1.4"
   }
 }
