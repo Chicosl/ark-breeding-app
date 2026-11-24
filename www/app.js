@@ -944,7 +944,7 @@ function viewAdd(){
     if(c.origem==="domesticado") h+='<label class="f">Impressão (%) — só se aparecer na tela (ex.: habilidade do Lost Colony)</label><input type="text" inputmode="decimal" id="ib" value="'+(c.ib??"")+'" placeholder="0">';
     if(modo==="valores"){
       h+='<label class="f">Valores da tela</label><p class="note" style="margin-top:0">Digite o <b>valor máximo</b> de cada status e veja os pontos na hora (o número da direita em “850,0 / 1.100,0”). Dano e Velocidade em %, como aparecem no jogo.</p>';
-      h+='<div class="vgrid"><div></div><div class="h">Valor</div><div class="h">Pontos</div>';
+      h+='<div class="vgrid"><div></div><div class="h">Valor</div><div class="h h3" title="Pontos selvagens · de mutação · do jogador (como Wild-Lvl, Mutations e Dom-Lvl no Smart Breeding)"><span>Selv.</span><span>Mut.</span><span>Jog.</span></div>';
       for(const x of inputStats(s)) h+='<div class="nm">'+STAT_NAMES[x.i]+'</div><div class="vin"><input type="text" inputmode="decimal" data-v="'+x.i+'" value="'+esc(c.vals?.[x.i]??"")+'" placeholder="'+(PERCENT.has(x.i)?"100,0":"0,0")+'">'+(PERCENT.has(x.i)?'<span>%</span>':'')+'</div><div class="res" id="res'+x.i+'"></div>';
       h+='</div><button class="btn pri" id="exBtn" style="width:100%;margin-top:12px">Descobrir pontos</button><div id="exMsg"></div>';
     } else {
@@ -1074,6 +1074,9 @@ function runExtract(auto){
   if(!r.err && !exResolved() && !auto) toast("Alguns status têm mais de uma possibilidade. Toque nos amarelos para escolher.");
   if(teIgnorada){ const m=document.getElementById("exMsg"); if(m){ const d=document.createElement("div"); d.className="msg warn"; d.textContent="A TE informada ("+String(teHint).replace(".",",")+"%) não bate com os valores. O cálculo foi feito sem ela; a TE calculada aparece acima. Se quiser, apague o campo TE."; m.appendChild(d); } }
 }
+/* célula com as 3 colunas: selvagem · mutação · jogador */
+function cell3(w,m,d){ const f=(v,cls)=>'<span class="'+(v===0||v==="0"||v==="–"?"z":cls)+'">'+esc(v)+'</span>'; return '<span class="c3">'+f(w,"s")+f(m,"m")+f(d,"j")+'</span>'; }
+function mutCol(c,i){ if(i===ST.TO) return "–"; const p=c.pts&&c.pts[i]; if(c.origem!=="criado") return 0; if(p&&p[1]) return p[1]; return ((c.mutM||0)+(c.mutP||0))>0 ? "?" : 0; }
 function renderEx(){
   const c=state.editing, s=byBp[c.sp]; if(!s) return;
   const ex=state.ex; const msg=document.getElementById("exMsg"); if(!msg) return;
@@ -1082,10 +1085,10 @@ function renderEx(){
   if(!ex){
     const q=quickAll(c,s); let warn=false, needTE=false;
     sts.forEach(x=>{ const el=document.getElementById("res"+x.i); const r=q[x.i];
-      if(!x.wild && x.i!==ST.TO){ el.className="res"; el.innerHTML=r&&r!=="vazio"?"0":"—"; return; }
+      if(!x.wild && x.i!==ST.TO){ el.className="res"; el.innerHTML=r&&r!=="vazio"?cell3(0,0,0):"—"; return; }
       if(!r||r==="vazio"){ el.className="res"; el.innerHTML="—"; return; }
-      if(r.needTE){ needTE=true; el.className="res"; el.innerHTML='<small style="font-size:11px">informe TE</small>'; return; }
-      if(r.exact){ el.className="res q"; el.innerHTML='<span class="s">'+r.w+'</span><small style="font-size:11px;color:var(--mut)">pts</small>'; }
+      if(r.needTE){ needTE=true; el.className="res"; el.innerHTML='<small style="font-size:11px">calculando…</small>'; return; }
+      if(r.exact){ el.className="res q"; el.innerHTML= x.i===ST.TO ? cell3(r.w,"–","–") : cell3(r.w, mutCol(c,x.i), 0); }
       else { warn=true; el.className="res bad"; el.innerHTML='≈ '+r.w+'?'; }
     });
     const any=Object.values(q).some(r=>r&&r!=="vazio");
@@ -1101,7 +1104,7 @@ function renderEx(){
   }
   const sols=currentSols(); const opts=optionsByStat(sols);
   const tamed=c.origem==="domesticado";
-  const fmt=(k,i)=>{ const [w,d]=k.split("|"); const x=sts.find(z=>z.i==i); return '<span class="s">S '+w+'</span>'+(tamed&&x&&x.dom?'<span class="j">J '+d+'</span>':''); };
+  const fmt=(k,i)=>{ const [w,d]=k.split("|"); const x=sts.find(z=>z.i==i); if(+i===ST.TO) return cell3(+w,"–","–"); return cell3(+w, mutCol(c,+i), c.origem==="selvagem"||!(x&&x.dom) ? 0 : +d); };
   let pending=0;
   for(const x of sts){
     const el=document.getElementById("res"+x.i); const m=opts[x.i];
@@ -1112,7 +1115,7 @@ function renderEx(){
       pending++; el.className="res amb"; el.innerHTML=keys.length+" opções";
       const box=document.createElement("div"); box.className="opts";
       keys.sort((a,b)=>(+a.split("|")[1])-(+b.split("|")[1]));
-      box.innerHTML=keys.map(k=>'<button class="opt" data-k="'+k+'">'+fmt(k,x.i)+'</button>').join("");
+      box.innerHTML=keys.map(k=>{ const [w,d]=k.split("|"); return '<button class="opt" data-k="'+k+'"><span style="color:var(--teal)">Selv. '+esc(w)+'</span><span style="color:var(--amber)">Jog. '+esc(d)+'</span></button>'; }).join("");
       box.querySelectorAll(".opt").forEach(b=>b.onclick=()=>{ ex.picks[x.i]=b.dataset.k; renderEx(); });
       el.after(box);
     }
@@ -1128,8 +1131,9 @@ function renderEx(){
       if(lo<=hi){ teTxt=' TE calculada: '+(lo*100).toLocaleString("pt-BR",{maximumFractionDigits:1})+(hi-lo>0.002?'–'+(hi*100).toLocaleString("pt-BR",{maximumFractionDigits:1}):'')+'%.'; if(c.te==null) c.te=Math.round((lo+hi)*500)/10; }
     }
     html='<div class="msg ok"><b>Pronto!</b> '+so.LwT+' pontos selvagens'+(tamed?' e '+so.LdT+' do jogador':'')+'.'+teTxt+' Confira e salve.</div>';
+    if(c.origem==="criado" && ((c.mutM||0)+(c.mutP||0))>0) html+='<div class="msg warn" style="font-size:13px">Numa cria com mutações, a coluna <b>Selv.</b> inclui os pontos de mutação: os valores da tela não permitem separar. Se souber quantos são, ajuste no modo “Já sei os pontos”.</div>';
   } else {
-    html='<div class="msg warn">Há '+pending+' status com mais de uma combinação possível (os números da tela batem com todas). Toque na opção certa. Dica: se você nunca subiu aquele status, escolha a opção com <b>J 0</b>.'+(tamed&&!ex.userTE?' Informar a <b>TE</b> costuma eliminar as dúvidas.':'')+'</div>';
+    html='<div class="msg warn">Há '+pending+' status com mais de uma combinação possível (os números da tela batem com todas). Toque na opção certa. Dica: se você nunca subiu aquele status, escolha a opção com <b>Jog. 0</b>.'+(tamed&&!ex.userTE?' Informar a <b>TE</b> costuma eliminar as dúvidas.':'')+'</div>';
   }
   if(ex.relaxed && !pending){ const so=sols[0]; const vis=Object.entries(so.pts).reduce((a,[i,p])=>a+(+i===ST.TO?0:p[0]),0); const sobra=so.LwT-vis;
     if(sobra>0) html+='<div class="msg warn"><b>'+sobra+' ponto'+(sobra>1?"s":"")+' selvage'+(sobra>1?"ns":"m")+'</b> não aparece'+(sobra>1?"m":"")+' em nenhum status visível (o Torpor indica '+so.LwT+', os status somam '+vis+'). Normalmente '+(sobra>1?"ficam":"fica")+' na Velocidade, que não muda o valor nessa espécie. Os pontos mostrados acima estão certos.</div>'; }
