@@ -169,6 +169,7 @@ td .who{font-size:12px;color:var(--mut)}
 a{color:var(--amber)}
 .muted{color:var(--mut)}
 .warnbox{background:#2b2214;border:1px solid #5a4520;color:#f6d79c;border-radius:12px;padding:10px 12px;font-size:13px;margin:8px 0}
+.vgrid input.unsure{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset}
 .h1sub{display:block;font-size:10px;font-weight:500;letter-spacing:.3px;opacity:.6;margin-top:1px}
 .aboutlist{margin:6px 0 0;padding-left:18px}.aboutlist li{margin:3px 0}
 </style>
@@ -517,11 +518,69 @@ function ocrNum(s){
   if(s==null) return null; let t=String(s).replace(/[Oo]/g,"0").replace(/[lI|]/g,"1").replace(/\s/g,"");
   const p=parseVal(t,false); return p?t:null;
 }
-const OCR_LABELS=[
-  [0,/\b(SA[UÚ]DE|HEALTH|VIDA)\b/i],[1,/\b(ESTAMINA|STAMINA|ENERGIA)\b/i],[3,/\b(OXIG[EÊ]NIO|OXYGEN)\b/i],
-  [4,/\b(COMIDA|FOOD)\b/i],[7,/\b(PESO|WEIGHT|CARGA)\b/i],[8,/\b(DANO|MELEE|COMBATE)\b/i],
-  [9,/\b(VELOCIDADE|SPEED|MOVEMENT)\b/i],[2,/\b(TORPOR|TORPIDITY|TORPIDEZ)\b/i],[11,/\b(CRAFT|CRIA[CÇ][AÃ]O)\b/i]
-];
+/* Rótulos do inventário, em inglês e português. A leitura de foto de TV costuma deformar as letras
+   ("EALTH", "OYGEN", "MELIE DAMACE"), então a comparação tolera alguns erros. */
+const OCR_NAMES=[[0,["HEALTH","SAUDE","VIDA"]],[1,["STAMINA","ESTAMINA","ENERGIA"]],[3,["OXYGEN","OXIGENIO"]],
+  [4,["FOOD","COMIDA"]],[7,["WEIGHT","PESO","CARGA"]],[8,["MELEEDAMAGE","MELEE","DAMAGE","DANO","COMBATE"]],
+  [9,["MOVEMENTSPEED","MOVEMENT","SPEED","VELOCIDADE"]],[2,["TORPIDITY","TORPOR","TORPIDEZ"]],
+  [11,["CRAFTINGSKILL","CRAFTING","CRIACAO"]],["ib",["IMPRINTING","IMPRINT","IMPRESSAO"]]];
+const OCR_ORDER=[0,1,3,4,7,8,9,2,11,"ib"]; // ordem das linhas no inventário
+function _lev(a,b){ const d=[...Array(b.length+1).keys()]; for(let i=1;i<=a.length;i++){ let prev=d[0]; d[0]=i; for(let j=1;j<=b.length;j++){ const tmp=d[j]; d[j]=Math.min(d[j]+1,d[j-1]+1,prev+(a[i-1]===b[j-1]?0:1)); prev=tmp; } } return d[b.length]; }
+function ocrLabel(text){
+  const up=norm(text).toUpperCase().replace(/[^A-Z]+/g," ").trim(); if(!up) return null;
+  const words=up.split(" ").filter(w=>w.length>=3); const all=up.replace(/ /g,"");
+  const tries=words.concat(words.length>1?[all]:[]);
+  let best=null;
+  for(const [i,names] of OCR_NAMES) for(const nm of names) for(const w of tries){
+    if(Math.abs(w.length-nm.length)>3) continue;
+    const d=_lev(w,nm), lim=Math.max(1,Math.floor(nm.length/3));
+    if(d<=lim && (!best || d/nm.length<best.r)) best={i, r:d/nm.length};
+  }
+  return best;
+}
+/* Um número do jogo lido com erros vira uma lista de candidatos, cada um com um "custo"
+   (quanto foi preciso corrigir). Todo valor do jogo tem exatamente uma casa decimal. */
+const OCR_SUB={o:["0"],O:["0"],D:["0"],Q:["0"],U:["0"],I:["1"],l:["1"],i:["1"],"|":["1"],"!":["1"],L:["1"],j:["1"],
+  z:["2"],Z:["2"],s:["5","8"],S:["5","8"],e:["8","0","6"],E:["8","6"],B:["8","3"],b:["6"],G:["6","0"],g:["9"],q:["9"],T:["7"],
+  A:["4","8"],a:["4"],x:[],X:[]};
+function _expand(tok){
+  // devolve [{d:"dígitos", cost}] — letras viram dígitos (custo 1) ou somem (custo 2)
+  let out=[{d:"",cost:0}];
+  for(const ch of tok){
+    if(/\d/.test(ch)){ out.forEach(o=>o.d+=ch); continue; }
+    if(ch==="."||ch===","||ch===" ") continue;
+    const subs=OCR_SUB[ch]; const nx=[];
+    for(const o of out){ if(subs) subs.forEach(dg=>nx.push({d:o.d+dg,cost:o.cost+1})); nx.push({d:o.d,cost:o.cost+2}); }
+    out=nx.sort((a,b)=>a.cost-b.cost).slice(0,48);
+  }
+  return out.filter(o=>o.d.length>=1);
+}
+function ocrCands(tok, pct){
+  if(!tok) return [];
+  let t=String(tok).trim();
+  if(pct) t=t.replace(/[%A4xX]$/,"%").replace(/%.*$/,"");
+  if(/[.,]$/.test(t)) return []; // número cortado ("44.")
+  const out=new Map();
+  const add=(d,cost)=>{ d=d.replace(/^0+(?=\d\d)/,""); if(d.length<2) return; const v=d.slice(0,-1)+"."+d.slice(-1); if(!out.has(v)||out.get(v)>cost) out.set(v,cost); };
+  for(const o of _expand(t)){
+    add(o.d,o.cost);
+    if(o.cost<=2){ // confusões entre dígitos parecidos (8↔0, 8↔6, 8↔3), no máximo uma
+      for(let k=0;k<o.d.length;k++){ const sw={"0":"8","8":"0","6":"8","3":"8"}[o.d[k]]; if(sw) add(o.d.slice(0,k)+sw+o.d.slice(k+1), o.cost+2); }
+    }
+    if(pct && o.d.length<=3) add("1"+o.d, o.cost+2); // "07.4" pode ser "107.4"/"187.4" (dígito da frente perdido)
+    if(pct && o.d.length<=3) for(let k=0;k<o.d.length;k++){ const sw={"0":"8","8":"0"}[o.d[k]]; if(sw) add("1"+o.d.slice(0,k)+sw+o.d.slice(k+1), o.cost+4); }
+  }
+  return [...out.entries()].map(([v,cost])=>({v,cost})).sort((a,b)=>a.cost-b.cost);
+}
+/* texto da linha de valor -> candidatos para o máximo (preferido) e para o atual */
+function ocrValue(raw, pct){
+  const t=String(raw||"").replace(/\s+/g,"");
+  if(pct) return {max:ocrCands(t,true), cur:[]};
+  const parts=t.split(/[\/|]/).filter(Boolean);
+  if(parts.length>=2) return {max:ocrCands(parts[parts.length-1],false), cur:ocrCands(parts[0],false), pair:true};
+  return {max:ocrCands(parts[0]||"",false), cur:[]};
+}
+function _sim(a,b){ return _lev(String(a),String(b)); }
 // "a / b" -> b ; "318.7 %" -> 318.7
 const RE_PAIR=/(\d[\d.,]*\d|\d)\s*[\/|]\s*(\d[\d.,]*\d|\d)/g;
 const RE_PCT=/(\d[\d.,]*\d|\d)\s*%/g;
@@ -562,22 +621,44 @@ function parseOcr(res, ctx){
   // cores: uma fileira com 6 números inteiros 0–255
   o.cores=ocrColors(L);
 
-  // ---------- inventário: rótulos escritos ----------
-  const found={};
-  for(const l of L){
-    for(const [i,re] of OCR_LABELS){ if(found[i]!=null || !re.test(l.t)) continue;
-      // valor na própria linha ou na linha à direita na mesma altura
-      let txt=l.t;
-      const right=L.filter(z=>z!==l && z.x>l.x+l.w*0.5 && Math.abs(z.cy-l.cy)<Math.max(l.h,z.h)*0.7).sort((a,b)=>a.x-b.x);
-      if(!pairsIn(txt).length && !pctsIn(txt).length && right.length) txt+=" "+right.map(z=>z.t).join(" ");
-      const pr=pairsIn(txt), pc=pctsIn(txt);
-      const v = PERCENT.has(i) ? (pc[0]||null) : (pr[0]||null);
-      if(v){ found[i]=v; }
-    }
-  }
-  if(Object.keys(found).length>=3){
+  if(/RAISED\s*BY|RA[I1]SED|CRIAD[OA]\s*POR/i.test(full)) o.criado=true;
+  // pontos ainda não distribuídos ("POINTS AVAILABLE 4", "PONTOS DISPONÍVEIS 4")
+  m=full.match(/P[O0][A-Z0-9]{1,5}S?\s*(?:AV|DISP|DISPON)[A-ZÍI]*\s*:?\s*(\d{1,3})/i); if(m) o.livres=parseInt(m[1]);
+  // nível sem número na mesma linha: procura um número logo ao lado
+  if(!o.nivel){ const lv=L.find(l=>/(LVL|LEVEL|N[IÍ]VEL)/i.test(l.t)); if(lv){ const nb=L.filter(z=>z!==lv && /^\s*\d{1,3}\s*$/.test(z.t) && Math.abs(z.cy-lv.cy)<lv.h*0.8 && z.x>lv.x).sort((a,b)=>a.x-b.x)[0]; if(nb) o.nivel=parseInt(nb.t); } }
+
+  // ---------- inventário: rótulos escritos (tolerante a erros) ----------
+  const lab=L.map(l=>({l, lb:ocrLabel(l.t)})).filter(z=>z.lb);
+  const distinct=new Set(lab.map(z=>z.lb.i));
+  if(distinct.size>=3){
     o._modo="inventario";
-    for(const [i,v] of Object.entries(found)) o.valores[ocrKey(+i)]=v;
+    const H=Math.max(8, ...lab.map(z=>z.l.h)); const y0=Math.min(...lab.map(z=>z.l.cy))-H, y1=Math.max(...lab.map(z=>z.l.cy))+H;
+    const isVal=t=>/\d/.test(t) && (/[\/|]/.test(t) || /^[\dA-Za-z.,%|!]{1,12}$/.test(t.replace(/\s/g,"")));
+    // linhas (rows) do bloco de status, de cima para baixo
+    const rows=[];
+    const rowOf=cy=>rows.find(r=>Math.abs(r.cy-cy)<H*0.75);
+    for(const z of lab){ let r=rowOf(z.l.cy); if(!r){ r={cy:z.l.cy, i:null, txt:[]}; rows.push(r); } if(r.i==null) r.i=z.lb.i;
+      const rest=z.l.t.replace(/^[^\d]*/,""); if(/\d/.test(rest)) r.txt.push({x:z.l.x+z.l.w, t:rest}); }
+    for(const l of L){ if(lab.some(z=>z.l===l)) continue; if(l.cy<y0||l.cy>y1||!isVal(l.t)) continue;
+      let r=rowOf(l.cy); if(!r){ r={cy:l.cy, i:null, txt:[]}; rows.push(r); } r.txt.push({x:l.x, t:l.t}); }
+    rows.sort((a,b)=>a.cy-b.cy);
+    // linha sem rótulo reconhecido: deduz pela ordem fixa do inventário
+    const used=new Set(rows.map(r=>r.i).filter(i=>i!=null));
+    rows.forEach((r,k)=>{ if(r.i!=null||!r.txt.length) return;
+      const prev=rows.slice(0,k).reverse().find(z=>z.i!=null), next=rows.slice(k+1).find(z=>z.i!=null);
+      const a=prev?OCR_ORDER.indexOf(prev.i):-1, b=next?OCR_ORDER.indexOf(next.i):OCR_ORDER.length;
+      const gap=OCR_ORDER.slice(a+1,b).filter(i=>!used.has(i));
+      if(gap.length){ r.i=gap[0]; r.deduzido=true; used.add(gap[0]); }
+    });
+    o._cands={}; o._cur={};
+    for(const r of rows){ if(r.i==null||!r.txt.length) continue;
+      const raw=r.txt.sort((a,b)=>a.x-b.x).map(z=>z.t).join(" ");
+      if(r.i==="ib"){ const mm=raw.replace(/[Oo]/g,"0").match(/(\d{1,3}(?:[.,]\d)?)/); if(mm && o.impressao==null){ const v=parseFloat(mm[1].replace(",",".")); if(v>=0&&v<=100) o.impressao=v; } continue; }
+      const pct=PERCENT.has(r.i); const cv=ocrValue(raw,pct);
+      if(o._cands[r.i]) continue;
+      o._cands[r.i]={max:cv.max, cur:cv.cur, raw, deduzido:!!r.deduzido};
+    }
+    ocrPick(o, null);
     return o;
   }
 
@@ -606,6 +687,67 @@ function parseOcr(res, ctx){
   o._nums=nums.map(z=>z.v);
   o._ordem=[0,7,3,2,1,4];
   return o;
+}
+/* Escolhe o melhor candidato de cada status.
+   Com a espécie conhecida, prefere o candidato que fecha exatamente em pontos inteiros.
+   Marca em o._incertos o que precisou de correção ou não foi confirmado. */
+const OCR_CUR_OK=new Set([0,1,3]); // vida, estamina e oxigênio costumam estar cheios: o "atual" serve de reserva
+function ocrPick(o, s, origem, ib, nivel){
+  if(!o._cands) return o;
+  o._incertos=[]; o._faltam=[];
+  for(const [k,c] of Object.entries(o._cands)){
+    const i=+k, pct=PERCENT.has(i), key=ocrKey(i);
+    let pool=c.max.map(z=>({...z, side:"max"}));
+    // o máximo nunca é menor que o atual
+    const curBest=c.cur.length?parseFloat(c.cur[0].v):null;
+    if(curBest!=null) pool=pool.filter(z=>parseFloat(z.v)>=curBest-0.05);
+    if(pct && (i===8)) pool=pool.filter(z=>parseFloat(z.v)>=100);
+    if(!pool.length && OCR_CUR_OK.has(i) && c.cur.length) pool=c.cur.map(z=>({...z, cost:z.cost+3, side:"cur"}));
+    if(!pool.length){ delete o.valores[key]; o._faltam.push(i); continue; }
+    // pontuação: custo da correção, distância ao valor "atual" (desempate) e, se der, se fecha em pontos
+    const curTxt=c.cur.length?c.cur[0].v:null;
+    const lim = nivel ? nivel+5 : 450;
+    for(const z of pool){
+      z.score=z.cost*10 + (curTxt? Math.min(_sim(z.v,curTxt),3) : 0);
+      if(s){ let q=null; try{ q=quickPoints(s,i,origem||"domesticado",z.v,null,(ib||0)/100); }catch(e){}
+        if(q && q.exact && q.w<=lim) { z.exact=true; z.score-=25; }
+        let qw=q&&q.w!=null?q.w:null;
+        if(qw==null && q && q.needTE){ try{ const q2=quickPoints(s,i,"criado",z.v,null,(ib||0)/100); if(q2&&q2.w!=null) qw=q2.w; }catch(e){} }
+        if(qw!=null) z.score+=Math.min(qw,240)/8;
+        else if(q && !q.exact && !q.needTE) z.score+=4;
+        if(q && q.w>lim) z.score+=40; }
+    }
+    pool.sort((a,b)=>a.score-b.score);
+    const best=pool[0];
+    o.valores[key]=best.v;
+    if(best.cost>0 || best.side==="cur" || c.deduzido && !best.exact) o._incertos.push(i);
+  }
+  return o;
+}
+/* junta a leitura normal com a leitura da imagem realçada */
+function mergeOcr(a,b){
+  if(!b) return a; if(!a) return b;
+  const o=a;
+  for(const k of ["especie","nivel","impressao","livres","nome","mutM","mutP","criado"]) if(o[k]==null && b[k]!=null) o[k]=b[k];
+  if(!o.cores && b.cores) o.cores=b.cores;
+  if(o._modo!=="inventario" && b._modo==="inventario"){ b._extra=true; return mergeOcr(b,{...a,_cands:null}); }
+  if(o._modo==="inventario" && b._cands){
+    for(const [k,c] of Object.entries(b._cands)){
+      const mine=o._cands[k];
+      if(!mine){ o._cands[k]=c; continue; }
+      const seen=new Map(); [...mine.max,...c.max].forEach(z=>{ if(!seen.has(z.v)||seen.get(z.v)>z.cost) seen.set(z.v,z.cost); });
+      mine.max=[...seen.entries()].map(([v,cost])=>({v,cost})).sort((x,y)=>x.cost-y.cost);
+      if(!mine.cur.length) mine.cur=c.cur;
+      mine.deduzido = mine.deduzido && c.deduzido;
+    }
+  }
+  if(o._modo==="cryopod" && b._modo==="cryopod" && (b._nums||[]).length>(o._nums||[]).length){ o._nums=b._nums; o._ordem=b._ordem; for(const k of ["dano","velocidade"]) if(!o.valores[k]&&b.valores[k]) o.valores[k]=b.valores[k]; }
+  return o;
+}
+function ocrNeedsMore(o){
+  if(!o.especie || !o.nivel) return true;
+  if(o._modo==="inventario"){ const c=o._cands||{}; return Object.keys(c).length<5 || Object.values(c).some(z=>!z.max.length||z.max[0].cost>0); }
+  return (o._nums||[]).length<5;
 }
 function ocrKey(i){ return {0:"vida",1:"estamina",2:"torpor",3:"oxigenio",4:"comida",7:"peso",8:"dano",9:"velocidade",11:"criacao"}[i]; }
 function ocrColors(L){
@@ -921,7 +1063,7 @@ function viewAdd(){
   h+='<label class="f">Espécie</label><div id="spBox"></div>';
   if(s){
     h+='<label class="f">Nome</label><input type="text" id="nome" value="'+esc(c.nome)+'" placeholder="Ex.: Rex Vida 1">';
-    h+='<div class="row" style="gap:10px"><div class="grow"><label class="f">Sexo</label><div class="seg" id="sexo">'+[["M","♂ Macho"],["F","♀ Fêmea"],["","—"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(c.sexo===v?"on":"")+'">'+t+'</button>').join("")+'</div></div><div style="width:92px"><label class="f">Nível</label><input type="number" inputmode="numeric" id="nivel" value="'+(c.nivel??"")+'"></div></div>';
+    h+='<div class="row" style="gap:10px"><div class="grow"><label class="f">Sexo</label><div class="seg" id="sexo">'+[["M","♂ Macho"],["F","♀ Fêmea"],["","—"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(c.sexo===v?"on":"")+'">'+t+'</button>').join("")+'</div></div></div><div class="row" style="gap:10px;margin-top:8px"><div class="grow"><label class="f">Nível</label><input type="number" inputmode="numeric" id="nivel" value="'+(c.nivel??"")+'"></div>'+(c.origem!=="selvagem"?'<div class="grow"><label class="f" title="Pontos que a criatura ainda não distribuiu (aparecem no jogo como Pontos disponíveis)">Pontos não distribuídos</label><input type="number" inputmode="numeric" id="livres" min="0" placeholder="0" value="'+(c.livres??"")+'"></div>':'')+'</div>';
     h+='<label class="f">Origem</label><div class="seg" id="origem">'+[["domesticado","Domesticado"],["criado","Criado"],["selvagem","Selvagem"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(c.origem===v?"on":"")+'">'+t+'</button>').join("")+'</div>';
     const modo=curMode(c);
     h+='<label class="f">Como informar</label><div class="seg" id="modo">'+[["valores","Pelos valores da tela"],["pontos","Já sei os pontos"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(modo===v?"on":"")+'">'+t+'</button>').join("")+'</div>';
@@ -965,8 +1107,8 @@ function viewAdd(){
   renderSpBox();
   setupPhoto();
   if(!s) return;
-  const bind=(id,key,fn=v=>v)=>{ const el=document.getElementById(id); if(el) el.oninput=()=>{ c[key]=fn(el.value); if(key==="te"||key==="ib") updateVals(); if(key==="te"||key==="nivel"||key==="ib") exInvalidate(); }; };
-  bind("nome","nome"); bind("nivel","nivel",numOrNull); bind("te","te",numOrNull); bind("ib","ib",numOrNull);
+  const bind=(id,key,fn=v=>v)=>{ const el=document.getElementById(id); if(el) el.oninput=()=>{ c[key]=fn(el.value); if(key==="te"||key==="ib") updateVals(); if(key==="te"||key==="nivel"||key==="ib"||key==="livres") exInvalidate(); }; };
+  bind("nome","nome"); bind("nivel","nivel",numOrNull); bind("livres","livres",numOrNull); bind("te","te",numOrNull); bind("ib","ib",numOrNull);
   bind("mutM","mutM",numOrNull); bind("mutP","mutP",numOrNull); bind("notas","notas");
   ["mae","pai","estado"].forEach(k=>{ const el=document.getElementById(k); if(el) el.onchange=()=>c[k]=el.value; });
   document.querySelectorAll(".cgrid input").forEach(el=>el.oninput=()=>{ const r=+el.dataset.r; const v=parseInt(el.value); c.cores[r]=isNaN(v)?0:v; paintSlot(r); });
@@ -1033,7 +1175,7 @@ function setupValues(c,s){
   c.vals=c.vals||{};
   const ins=[...document.querySelectorAll(".vgrid input")];
   ins.forEach((el,ix)=>{
-    el.oninput=()=>{ c.vals[el.dataset.v]=el.value; el.classList.remove("miss"); exInvalidate(); };
+    el.oninput=()=>{ c.vals[el.dataset.v]=el.value; el.classList.remove("miss"); el.classList.remove("unsure"); exInvalidate(); };
     el.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); const n=ins[ix+1]; if(n) n.focus(); else { el.blur(); runExtract(); } } };
   });
   document.getElementById("exBtn").onclick=runExtract;
@@ -1042,7 +1184,10 @@ function setupValues(c,s){
 function runExtract(){
   const c=state.editing, s=byBp[c.sp];
   const teHint = c.origem==="domesticado" ? c.te : null;
-  const r=extractLevels(s,c.origem,c.nivel,c.vals||{},teHint,c.ib);
+  // pontos não distribuídos: tenta descontando do nível; se não fechar, tenta o nível como está
+  const nivelEf = c.nivel && c.origem!=="selvagem" ? c.nivel-(c.livres||0) : c.nivel;
+  let r=extractLevels(s,c.origem,nivelEf,c.vals||{},teHint,c.ib);
+  if(r.err && nivelEf!==c.nivel){ const r2=extractLevels(s,c.origem,c.nivel,c.vals||{},teHint,c.ib); if(!r2.err) r=r2; }
   state.ex = r.err ? {err:r.err, bad:r.bad||[]} : {solutions:r.solutions, picks:{}, relaxed:r.relaxed, userTE:teHint!=null};
   renderEx();
   if(!r.err && !exResolved()) toast("Alguns status têm mais de uma possibilidade. Toque nos amarelos para escolher.");
@@ -1160,10 +1305,19 @@ async function setupPhoto(){
         etapa="ler o texto (ML Kit)"; step("Lendo o texto da imagem…");
         const res=await fn({base64:b64}); state.lastOcr=res;
         etapa="interpretar o texto";
-        const o=parseOcr(res);
+        let o=parseOcr(res);
+        if(ocrNeedsMore(o)){
+          etapa="ler de novo com a imagem realçada"; step("Lendo de novo com a imagem realçada…");
+          try{ const b2=await enhanceForOcr(f); const res2=await fn({base64:await blobToBase64(b2)}); state.lastOcr2=res2; o=mergeOcr(o, parseOcr(res2)); }catch(e2){ /* a 1ª leitura continua valendo */ }
+          etapa="interpretar o texto";
+        }
         const c=state.editing;
         let s=byBp[c.sp];
         if(!s && o.especie){ const t0=norm(o.especie); s=SPECIES.find(x=>norm(x.n)===t0 && !x.v.length)||SPECIES.find(x=>norm(x.n)===t0); }
+        if(o._modo==="inventario"){
+          const org=o.criado?"criado":(c.origem||"domesticado"); const ibv=o.impressao!=null?o.impressao:c.ib;
+          const nv=o.nivel||c.nivel; ocrPick(o, s, org, ibv, nv? nv-(o.livres||0) : null);
+        }
         if(o._modo==="cryopod" && s){
           const origem=((o.mutM||0)+(o.mutP||0))>0 ? "criado" : (c.origem||"domesticado");
           assignCryopod(o, s, origem, o.impressao!=null?o.impressao:c.ib);
@@ -1177,9 +1331,12 @@ async function setupPhoto(){
         lin.push("<b>Linhas de texto lidas:</b> "+nLin);
         lin.push("<b>Tipo de tela:</b> "+(o._modo==="inventario"?"inventário (com nomes)":o._modo==="cryopod"?"card do cryopod (ícones)":"não identificado"));
         lin.push("<b>Espécie:</b> "+(o.especie?esc(o.especie):(byBp[c.sp]?esc(spLabel(byBp[c.sp]))+" (já escolhida)":'<span style="color:var(--red)">não reconhecida — escolha no campo Espécie</span>')));
-        lin.push("<b>Nível:</b> "+(o.nivel||"—")+(o.impressao!=null?" · <b>Impressão:</b> "+o.impressao+"%":"")+((o.mutM||o.mutP)?" · <b>Mutações:</b> "+(o.mutM||0)+"/"+(o.mutP||0):""));
+        lin.push("<b>Nível:</b> "+(o.nivel||'<span style="color:var(--red)">não lido — digite</span>')+(o.livres?" · <b>Pontos não distribuídos:</b> "+o.livres:"")+(o.impressao!=null?" · <b>Impressão:</b> "+o.impressao+"%":"")+((o.mutM||o.mutP)?" · <b>Mutações:</b> "+(o.mutM||0)+"/"+(o.mutP||0):""));
         const vk=Object.entries(o.valores).map(([k,v])=>k+" "+esc(v));
         lin.push("<b>Valores ("+nVal+"):</b> "+(vk.length?vk.join(" · "):'<span style="color:var(--red)">nenhum</span>'));
+        const inc=(o._incertos||[]).map(i=>STAT_NAMES[i]);
+        if(inc.length) lin.push('<span style="color:var(--amber)">Confira (leitura duvidosa, marcados em amarelo): <b>'+esc(inc.join(", "))+'</b></span>');
+        if(o.livres) lin.push('<span style="color:var(--mut)">Os '+o.livres+' pontos não distribuídos aumentam o nível mas não estão em nenhum status; o cálculo já desconta.</span>');
         if(o._modo==="cryopod" && !s && nums.length) lin.push('<span style="color:var(--amber)">Achei '+nums.length+' números, mas sem a espécie não sei a qual status cada um pertence. Escolha a espécie e leia a foto de novo.</span>');
         if(!nLin) lin.push('<span style="color:var(--red)">O leitor não encontrou texto. Tente um print, ou uma foto mais reta, nítida e sem reflexo.</span>');
         const rs=sheet('<h3 style="margin:0 0 8px">Resultado da leitura</h3><div style="font-size:14px;line-height:1.6">'+lin.join("<br>")+'</div><div class="row" style="margin-top:12px"><button class="btn grow" data-t>Ver texto lido</button><button class="btn pri grow" data-x>Ok</button></div>',{center:true});
@@ -1274,6 +1431,25 @@ function shrink(file){
     img.src=url;
   });
 }
+/* 2ª leitura: imagem ampliada, em tons de cinza e com contraste esticado (ajuda em foto de TV) */
+function enhanceForOcr(file){
+  return new Promise((res,rej)=>{
+    const img=new Image(); const url=URL.createObjectURL(file);
+    img.onload=()=>{ let {width:w,height:h}=img; const L=Math.max(w,h); const k=L<2400?2400/L:Math.min(1,2600/L); w=Math.round(w*k); h=Math.round(h*k);
+      const cv=document.createElement("canvas"); cv.width=w; cv.height=h; const ctx=cv.getContext("2d",{willReadFrequently:true});
+      ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality="high"; ctx.drawImage(img,0,0,w,h);
+      const id=ctx.getImageData(0,0,w,h), d=id.data, hist=new Uint32Array(256), n=w*h;
+      for(let i=0;i<d.length;i+=4){ const y=(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114)|0; d[i]=y; hist[y]++; }
+      let lo=0, hi=255, acc=0; for(let v=0;v<256;v++){ acc+=hist[v]; if(acc>n*0.02){ lo=v; break; } }
+      acc=0; for(let v=255;v>=0;v--){ acc+=hist[v]; if(acc>n*0.02){ hi=v; break; } }
+      const sc=255/Math.max(1,hi-lo);
+      for(let i=0;i<d.length;i+=4){ const y=Math.max(0,Math.min(255,(d[i]-lo)*sc)); d[i]=d[i+1]=d[i+2]=y; }
+      ctx.putImageData(id,0,0);
+      cv.toBlob(b=>{ URL.revokeObjectURL(url); b?res(b):rej(new Error("blob")); },"image/jpeg",0.92); };
+    img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error("img")); };
+    img.src=url;
+  });
+}
 function applyPhoto(o){
   const c=state.editing;
   if(o.especie && !c.sp){
@@ -1281,7 +1457,7 @@ function applyPhoto(o){
     const m=SPECIES.find(s=>norm(s.n)===t && !s.v.length) || SPECIES.find(s=>norm(s.n)===t) || SPECIES.find(s=>t.includes(norm(s.n))||norm(s.n).includes(t));
     if(m) c.sp=m.bp;
   }
-  if(o.nome) c.nome=o.nome; if(o.nivel) c.nivel=o.nivel; if(o.sexo==="M"||o.sexo==="F") c.sexo=o.sexo;
+  if(o.nome) c.nome=o.nome; if(o.nivel) c.nivel=o.nivel; if(o.livres!=null) c.livres=o.livres||null; if(o.sexo==="M"||o.sexo==="F") c.sexo=o.sexo;
   if(o.impressao!=null && !isNaN(parseFloat(o.impressao))){ c.ib=parseFloat(o.impressao); if(o.criado===true) c.origem="criado"; else if(o.criado===false) c.origem="domesticado"; }
   if(Array.isArray(o.cores) && o.cores.length>=6){ c.cores=[0,1,2,3,4,5].map(r=>{ const v=parseInt(o.cores[r]); return isNaN(v)?0:v; }); }
   if(o.mutM!=null && !isNaN(parseInt(o.mutM))) c.mutM=parseInt(o.mutM);
@@ -1305,6 +1481,7 @@ function applyPhoto(o){
         document.querySelectorAll(modoV?'.vgrid input[data-v="'+x.i+'"]':'.stgrid input[data-i="'+x.i+'"]').forEach(el=>el.classList.add("miss")); }
     }
   }
+  (o._incertos||[]).forEach(i=>document.querySelectorAll('.vgrid input[data-v="'+i+'"]').forEach(el=>{ if(!el.classList.contains("miss")) el.classList.add("unsure"); }));
   const box=document.getElementById("exMsg")||document.querySelector(".stgrid");
   if(miss.length && n){
     const d=document.createElement("div"); d.className="msg warn"; d.id="photoMiss";
