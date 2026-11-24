@@ -392,8 +392,24 @@ function _sim(a,b){ return _lev(String(a),String(b)); }
 const RE_PAIR=/(\d[\d.,]*\d|\d)\s*[\/|]\s*(\d[\d.,]*\d|\d)/g;
 const RE_PCT=/(\d[\d.,]*\d|\d)\s*%/g;
 
+/* O leitor às vezes junta numa linha só textos de colunas diferentes que estão na mesma altura
+   ("1855.9 / 5060.1     1050.0 / 1050.0"). Pela posição de cada palavra, um vão grande separa as colunas. */
+function _splitLine(l){
+  const els=(l.e||[]).filter(e=>e && e.t!=null && e.w!=null).map(e=>({t:String(e.t), x:e.x||0, y:e.y||l.y, w:e.w||0, h:e.h||l.h})).sort((a,b)=>a.x-b.x);
+  if(els.length<2) return [l];
+  const gapMax=Math.max(12, (l.h||10)*1.5);
+  const segs=[[els[0]]];
+  for(let k=1;k<els.length;k++){ const p=els[k-1], c=els[k]; if(c.x-(p.x+p.w)>gapMax) segs.push([c]); else segs[segs.length-1].push(c); }
+  if(segs.length===1) return [l];
+  return segs.map(g=>{ const x=Math.min(...g.map(e=>e.x)), r=Math.max(...g.map(e=>e.x+e.w)), y=Math.min(...g.map(e=>e.y)), bt=Math.max(...g.map(e=>e.y+e.h));
+    return {t:g.map(e=>e.t).join(" "), x, y, w:r-x, h:Math.max(bt-y,1), e:g}; });
+}
 function ocrLines(res){
-  const L=(res&&res.lines||[]).map(l=>({t:String(l.t||""), x:l.x||0, y:l.y||0, w:l.w||0, h:l.h||10, e:l.e||[]}));
+  const L=[];
+  for(const l0 of (res&&res.lines||[])){
+    const l={t:String(l0.t||""), x:l0.x||0, y:l0.y||0, w:l0.w||0, h:l0.h||10, e:l0.e||[]};
+    _splitLine(l).forEach(z=>L.push(z));
+  }
   L.forEach(l=>{ l.cy=l.y+l.h/2; l.cx=l.x+l.w/2; });
   return L;
 }
@@ -576,6 +592,7 @@ function assignCryopod(o, s, origem, ib){
   const prior=o._ordem.filter(i=>need.includes(i)).concat(need.filter(i=>!o._ordem.includes(i)));
   let best=null;
   const ibF=(ib||0)/100;
+  const semTeto = origem==="criado" && ((o.mutM||0)+(o.mutP||0))>0; // mutações não entram no torpor
   const score=(asg)=>{
     let sc=0, sumW=0, tor=null;
     for(const [i,v] of Object.entries(asg)){
@@ -583,6 +600,7 @@ function assignCryopod(o, s, origem, ib){
       if(r && r.exact){ sc+=10; if(+i===ST.TO) tor=r.w; else sumW+=r.w; } else if(r && r.needTE){ sc+=5; }
     }
     if(tor!=null && sumW===tor) sc+=15; // soma fecha com o torpor
+    if(tor!=null && sumW>tor && !semTeto) sc-=30; // sem mutações, nenhum status pode somar mais pontos selvagens que o torpor indica
     prior.forEach((i,k)=>{ if(asg[i]===nums[k]) sc+=1; });
     return sc;
   };
