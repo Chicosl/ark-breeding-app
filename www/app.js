@@ -381,11 +381,12 @@ function ocrCands(tok, pct){
 }
 /* texto da linha de valor -> candidatos para o máximo (preferido) e para o atual */
 function ocrValue(raw, pct){
-  const t=String(raw||"").replace(/\s+/g,"");
-  if(pct) return {max:ocrCands(t,true), cur:[]};
-  const parts=t.split(/[\/|]/).filter(Boolean);
-  if(parts.length>=2) return {max:ocrCands(parts[parts.length-1],false), cur:ocrCands(parts[0],false), pair:true};
-  return {max:ocrCands(parts[0]||"",false), cur:[]};
+  const t=String(raw||"").trim();
+  const first=x=>(x.trim().split(/\s+/)[0]||""), last=x=>{ const a=x.trim().split(/\s+/); return a[a.length-1]||""; };
+  if(pct){ const m=t.match(/([0-9A-Za-z.,|!]+)\s*%/); return {max:ocrCands(m?m[1]:first(t),true), cur:[]}; }
+  const ix=t.search(/[\/|]/);
+  if(ix>=0){ const a=t.slice(0,ix), b=t.slice(ix+1); return {max:ocrCands(first(b),false), cur:ocrCands(last(a),false), pair:true}; }
+  return {max:ocrCands(first(t),false), cur:[]};
 }
 function _sim(a,b){ return _lev(String(a),String(b)); }
 // "a / b" -> b ; "318.7 %" -> 318.7
@@ -430,7 +431,7 @@ function parseOcr(res, ctx){
   const tryName=t=>{ const k=norm(t).replace(/[^a-z0-9]/g,""); if(k.length>=3 && spByNorm[k]) return spByNorm[k].n;
     const f=fix(t).replace(/i/g,"l"); if(f.length<5) return null;
     let best=null, bd=9; for(const key of keys){ const kk=key.replace(/i/g,"l"); const dd=lev(f,kk); if(dd<bd){bd=dd; best=key;} }
-    return bd<=Math.min(2,Math.floor(f.length/5)) ? spFix[best].n : null; };
+    return bd<=Math.min(2,Math.floor(f.length/4)) ? spFix[best].n : null; };
   m=full.match(/\(([^()\n]{3,40})\)?/); if(m && tryName(m[1])) o.especie=tryName(m[1]);
   if(!o.especie) for(const l of L){ const n=tryName(l.t); if(n){ o.especie=n; break; } }
   // nome: texto antes de " - LVL"
@@ -462,7 +463,9 @@ function parseOcr(res, ctx){
     const rowOf=cy=>rows.find(r=>Math.abs(r.cy-cy)<H*0.75);
     for(const z of lab){ let r=rowOf(z.l.cy); if(!r){ r={cy:z.l.cy, i:null, txt:[]}; rows.push(r); } if(r.i==null) r.i=z.lb.i;
       const rest=z.l.t.replace(/^[^\d]*/,""); if(/\d/.test(rest)) r.txt.push({x:z.l.x+z.l.w, t:rest}); }
+    const xsL=lab.map(z=>z.l.x).sort((a,b)=>a-b), labelX=xsL[Math.floor(xsL.length/2)];
     for(const l of L){ if(lab.some(z=>z.l===l)) continue; if(l.cy<y0||l.cy>y1||!isVal(l.t)) continue;
+      if(l.x<=labelX) continue; // números à esquerda dos nomes são de outra coisa (itens do inventário)
       let r=rowOf(l.cy); if(!r){ r={cy:l.cy, i:null, txt:[]}; rows.push(r); } r.txt.push({x:l.x, t:l.t}); }
     rows.sort((a,b)=>a.cy-b.cy);
     // linha sem rótulo reconhecido: deduz pela ordem fixa do inventário
@@ -473,9 +476,13 @@ function parseOcr(res, ctx){
       const gap=OCR_ORDER.slice(a+1,b).filter(i=>!used.has(i));
       if(gap.length){ r.i=gap[0]; r.deduzido=true; used.add(gap[0]); }
     });
-    o._cands={}; o._cur={};
+    o._cands={}; o._cur={}; o._rows=rows;
     for(const r of rows){ if(r.i==null||!r.txt.length) continue;
-      const raw=r.txt.sort((a,b)=>a.x-b.x).map(z=>z.t).join(" ");
+      const pcs=r.txt.sort((a,b)=>a.x-b.x);
+      let k=pcs.findIndex(z=>/\d\s*[\/|]|[\/|]\s*\d|%/.test(z.t));
+      let raw;
+      if(k<0) raw=pcs.map(z=>z.t).join(" ");
+      else { raw=pcs[k].t; if(/[\/|]\s*$/.test(raw) && pcs[k+1]) raw+=" "+pcs[k+1].t; else if(/^\s*[\/|]/.test(raw) && k>0) raw=pcs[k-1].t+" "+raw; }
       if(r.i==="ib"){ const mm=raw.replace(/[Oo]/g,"0").match(/(\d{1,3}(?:[.,]\d)?)/); if(mm && o.impressao==null){ const v=parseFloat(mm[1].replace(",",".")); if(v>=0&&v<=100) o.impressao=v; } continue; }
       const pct=PERCENT.has(r.i); const cv=ocrValue(raw,pct);
       if(o._cands[r.i]) continue;
@@ -518,6 +525,19 @@ const OCR_CUR_OK=new Set([0,1,3]); // vida, estamina e oxigênio costumam estar 
 function ocrPick(o, s, origem, ib, nivel){
   if(!o._cands) return o;
   o._incertos=[]; o._faltam=[];
+  if(s && o._rows){ // refaz a dedução das linhas sem rótulo usando só os status desta espécie
+    const has=new Set(inputStats(s).map(x=>x.i).concat(["ib"]));
+    const ord=OCR_ORDER.filter(i=>has.has(i));
+    const used=new Set(o._rows.filter(r=>!r.deduzido&&r.i!=null).map(r=>r.i));
+    o._rows.forEach((r,k)=>{ if(!r.deduzido) return;
+      const prev=o._rows.slice(0,k).reverse().find(z=>z.i!=null&&!z.deduzido), next=o._rows.slice(k+1).find(z=>z.i!=null&&!z.deduzido);
+      const a=prev?ord.indexOf(prev.i):-1, b=next?ord.indexOf(next.i):ord.length;
+      const gap=ord.slice(a+1,b<0?ord.length:b).filter(i=>!used.has(i));
+      const old=r.i; const ni=gap.length?gap[0]:null;
+      if(ni!==old && o._cands[old]){ const c=o._cands[old]; delete o._cands[old]; delete o.valores[ocrKey(old)]; if(ni!=null && ni!=="ib") o._cands[ni]=c; }
+      r.i=ni; if(ni!=null) used.add(ni);
+    });
+  }
   for(const [k,c] of Object.entries(o._cands)){
     const i=+k, pct=PERCENT.has(i), key=ocrKey(i);
     let pool=c.max.map(z=>({...z, side:"max"}));
@@ -915,7 +935,7 @@ function viewAdd(){
   h+='<label class="f">Espécie</label><div id="spBox"></div>';
   if(s){
     h+='<label class="f">Nome</label><input type="text" id="nome" value="'+esc(c.nome)+'" placeholder="Ex.: Rex Vida 1">';
-    h+='<div class="row" style="gap:10px"><div class="grow"><label class="f">Sexo</label><div class="seg" id="sexo">'+[["M","♂ Macho"],["F","♀ Fêmea"],["","—"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(c.sexo===v?"on":"")+'">'+t+'</button>').join("")+'</div></div></div><div class="row" style="gap:10px;margin-top:8px"><div class="grow"><label class="f">Nível</label><input type="number" inputmode="numeric" id="nivel" value="'+(c.nivel??"")+'"></div>'+(c.origem!=="selvagem"?'<div class="grow"><label class="f" title="Pontos que a criatura ainda não distribuiu (aparecem no jogo como Pontos disponíveis)">Pontos não distribuídos</label><input type="number" inputmode="numeric" id="livres" min="0" placeholder="0" value="'+(c.livres??"")+'"></div>':'')+'</div>';
+    h+='<div class="row" style="gap:10px"><div class="grow"><label class="f">Sexo</label><div class="seg" id="sexo">'+[["M","♂ Macho"],["F","♀ Fêmea"],["","—"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(c.sexo===v?"on":"")+'">'+t+'</button>').join("")+'</div></div></div><div class="row" style="gap:10px;margin-top:8px"><div style="width:120px"><label class="f">Nível</label><input type="number" inputmode="numeric" id="nivel" value="'+(c.nivel??"")+'"></div>'+'</div>';
     h+='<label class="f">Origem</label><div class="seg" id="origem">'+[["domesticado","Domesticado"],["criado","Criado"],["selvagem","Selvagem"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(c.origem===v?"on":"")+'">'+t+'</button>').join("")+'</div>';
     const modo=curMode(c);
     h+='<label class="f">Como informar</label><div class="seg" id="modo">'+[["valores","Pelos valores da tela"],["pontos","Já sei os pontos"]].map(([v,t])=>'<button data-v="'+v+'" class="'+(modo===v?"on":"")+'">'+t+'</button>').join("")+'</div>';
@@ -959,8 +979,8 @@ function viewAdd(){
   renderSpBox();
   setupPhoto();
   if(!s) return;
-  const bind=(id,key,fn=v=>v)=>{ const el=document.getElementById(id); if(el) el.oninput=()=>{ c[key]=fn(el.value); if(key==="te"||key==="ib") updateVals(); if(key==="te"||key==="nivel"||key==="ib"||key==="livres") exInvalidate(); }; };
-  bind("nome","nome"); bind("nivel","nivel",numOrNull); bind("livres","livres",numOrNull); bind("te","te",numOrNull); bind("ib","ib",numOrNull);
+  const bind=(id,key,fn=v=>v)=>{ const el=document.getElementById(id); if(el) el.oninput=()=>{ c[key]=fn(el.value); if(key==="te"||key==="ib") updateVals(); if(key==="te"||key==="nivel"||key==="ib") exInvalidate(); }; };
+  bind("nome","nome"); bind("nivel","nivel",numOrNull); bind("te","te",numOrNull); bind("ib","ib",numOrNull);
   bind("mutM","mutM",numOrNull); bind("mutP","mutP",numOrNull); bind("notas","notas");
   ["mae","pai","estado"].forEach(k=>{ const el=document.getElementById(k); if(el) el.onchange=()=>c[k]=el.value; });
   document.querySelectorAll(".cgrid input").forEach(el=>el.oninput=()=>{ const r=+el.dataset.r; const v=parseInt(el.value); c.cores[r]=isNaN(v)?0:v; paintSlot(r); });
@@ -1036,10 +1056,8 @@ function setupValues(c,s){
 function runExtract(){
   const c=state.editing, s=byBp[c.sp];
   const teHint = c.origem==="domesticado" ? c.te : null;
-  // pontos não distribuídos: tenta descontando do nível; se não fechar, tenta o nível como está
-  const nivelEf = c.nivel && c.origem!=="selvagem" ? c.nivel-(c.livres||0) : c.nivel;
-  let r=extractLevels(s,c.origem,nivelEf,c.vals||{},teHint,c.ib);
-  if(r.err && nivelEf!==c.nivel){ const r2=extractLevels(s,c.origem,c.nivel,c.vals||{},teHint,c.ib); if(!r2.err) r=r2; }
+  // o nível mostrado no jogo não inclui os "pontos disponíveis" ainda não distribuídos (confirmado com um Baryonyx nível 217 com 41 pontos livres)
+  const r=extractLevels(s,c.origem,c.nivel,c.vals||{},teHint,c.ib);
   state.ex = r.err ? {err:r.err, bad:r.bad||[]} : {solutions:r.solutions, picks:{}, relaxed:r.relaxed, userTE:teHint!=null};
   renderEx();
   if(!r.err && !exResolved()) toast("Alguns status têm mais de uma possibilidade. Toque nos amarelos para escolher.");
@@ -1168,7 +1186,7 @@ async function setupPhoto(){
         if(!s && o.especie){ const t0=norm(o.especie); s=SPECIES.find(x=>norm(x.n)===t0 && !x.v.length)||SPECIES.find(x=>norm(x.n)===t0); }
         if(o._modo==="inventario"){
           const org=o.criado?"criado":(c.origem||"domesticado"); const ibv=o.impressao!=null?o.impressao:c.ib;
-          const nv=o.nivel||c.nivel; ocrPick(o, s, org, ibv, nv? nv-(o.livres||0) : null);
+          ocrPick(o, s, org, ibv, o.nivel||c.nivel||null);
         }
         if(o._modo==="cryopod" && s){
           const origem=((o.mutM||0)+(o.mutP||0))>0 ? "criado" : (c.origem||"domesticado");
@@ -1183,12 +1201,11 @@ async function setupPhoto(){
         lin.push("<b>Linhas de texto lidas:</b> "+nLin);
         lin.push("<b>Tipo de tela:</b> "+(o._modo==="inventario"?"inventário (com nomes)":o._modo==="cryopod"?"card do cryopod (ícones)":"não identificado"));
         lin.push("<b>Espécie:</b> "+(o.especie?esc(o.especie):(byBp[c.sp]?esc(spLabel(byBp[c.sp]))+" (já escolhida)":'<span style="color:var(--red)">não reconhecida — escolha no campo Espécie</span>')));
-        lin.push("<b>Nível:</b> "+(o.nivel||'<span style="color:var(--red)">não lido — digite</span>')+(o.livres?" · <b>Pontos não distribuídos:</b> "+o.livres:"")+(o.impressao!=null?" · <b>Impressão:</b> "+o.impressao+"%":"")+((o.mutM||o.mutP)?" · <b>Mutações:</b> "+(o.mutM||0)+"/"+(o.mutP||0):""));
+        lin.push("<b>Nível:</b> "+(o.nivel||'<span style="color:var(--red)">não lido — digite</span>')+(o.impressao!=null?" · <b>Impressão:</b> "+o.impressao+"%":"")+((o.mutM||o.mutP)?" · <b>Mutações:</b> "+(o.mutM||0)+"/"+(o.mutP||0):""));
         const vk=Object.entries(o.valores).map(([k,v])=>k+" "+esc(v));
         lin.push("<b>Valores ("+nVal+"):</b> "+(vk.length?vk.join(" · "):'<span style="color:var(--red)">nenhum</span>'));
         const inc=(o._incertos||[]).map(i=>STAT_NAMES[i]);
         if(inc.length) lin.push('<span style="color:var(--amber)">Confira (leitura duvidosa, marcados em amarelo): <b>'+esc(inc.join(", "))+'</b></span>');
-        if(o.livres) lin.push('<span style="color:var(--mut)">Os '+o.livres+' pontos não distribuídos aumentam o nível mas não estão em nenhum status; o cálculo já desconta.</span>');
         if(o._modo==="cryopod" && !s && nums.length) lin.push('<span style="color:var(--amber)">Achei '+nums.length+' números, mas sem a espécie não sei a qual status cada um pertence. Escolha a espécie e leia a foto de novo.</span>');
         if(!nLin) lin.push('<span style="color:var(--red)">O leitor não encontrou texto. Tente um print, ou uma foto mais reta, nítida e sem reflexo.</span>');
         const rs=sheet('<h3 style="margin:0 0 8px">Resultado da leitura</h3><div style="font-size:14px;line-height:1.6">'+lin.join("<br>")+'</div><div class="row" style="margin-top:12px"><button class="btn grow" data-t>Ver texto lido</button><button class="btn pri grow" data-x>Ok</button></div>',{center:true});
@@ -1309,7 +1326,7 @@ function applyPhoto(o){
     const m=SPECIES.find(s=>norm(s.n)===t && !s.v.length) || SPECIES.find(s=>norm(s.n)===t) || SPECIES.find(s=>t.includes(norm(s.n))||norm(s.n).includes(t));
     if(m) c.sp=m.bp;
   }
-  if(o.nome) c.nome=o.nome; if(o.nivel) c.nivel=o.nivel; if(o.livres!=null) c.livres=o.livres||null; if(o.sexo==="M"||o.sexo==="F") c.sexo=o.sexo;
+  if(o.nome) c.nome=o.nome; if(o.nivel) c.nivel=o.nivel; if(o.sexo==="M"||o.sexo==="F") c.sexo=o.sexo;
   if(o.impressao!=null && !isNaN(parseFloat(o.impressao))){ c.ib=parseFloat(o.impressao); if(o.criado===true) c.origem="criado"; else if(o.criado===false) c.origem="domesticado"; }
   if(Array.isArray(o.cores) && o.cores.length>=6){ c.cores=[0,1,2,3,4,5].map(r=>{ const v=parseInt(o.cores[r]); return isNaN(v)?0:v; }); }
   if(o.mutM!=null && !isNaN(parseInt(o.mutM))) c.mutM=parseInt(o.mutM);
